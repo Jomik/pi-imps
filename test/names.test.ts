@@ -1,60 +1,49 @@
 import { describe, expect, it } from "vitest";
 import { createNamePool } from "../src/names.js";
 
-const POOL_SIZE = 18;
-
 describe("createNamePool", () => {
-  it("allocate returns a name from the pool", () => {
+  it("allocate returns a capitalized string name", () => {
     const pool = createNamePool();
     const name = pool.allocate();
     expect(typeof name).toBe("string");
-    expect(name).not.toMatch(/^imp-\d+$/);
+    expect(name.length).toBeGreaterThan(0);
+    expect(name[0]).toBe(name[0].toUpperCase());
   });
 
-  it("allocating all 18 names exhausts the pool", () => {
+  it("allocates unique names", () => {
     const pool = createNamePool();
     const names = new Set<string>();
-    for (let i = 0; i < POOL_SIZE; i++) {
+    for (let i = 0; i < 50; i++) {
       names.add(pool.allocate());
     }
-    expect(names.size).toBe(POOL_SIZE);
-    // none should be generated names
-    for (const n of names) {
-      expect(n).not.toMatch(/^imp-\d+$/);
+    expect(names.size).toBe(50);
+  });
+
+  it("does not return fallback names under normal usage", () => {
+    const pool = createNamePool();
+    for (let i = 0; i < 50; i++) {
+      expect(pool.allocate()).not.toMatch(/^imp-\d+$/);
     }
   });
 
-  it("after exhaustion, allocate returns imp-1, imp-2, etc.", () => {
+  it("release removes name from used set, allowing potential reuse", () => {
     const pool = createNamePool();
-    for (let i = 0; i < POOL_SIZE; i++) pool.allocate();
-    expect(pool.allocate()).toBe("imp-1");
-    expect(pool.allocate()).toBe("imp-2");
+    const name = pool.allocate();
+    pool.release(name);
+    // After release, the same name should not cause a collision
+    // if randomly generated again. We can't test deterministic reuse
+    // since generation is random, but we verify release doesn't throw
+    // and the pool continues to produce unique names.
+    const next = pool.allocate();
+    expect(typeof next).toBe("string");
+    expect(next.length).toBeGreaterThan(0);
   });
 
-  it("releasing a pool name makes it available again", () => {
+  it("release is idempotent", () => {
     const pool = createNamePool();
-    const first = pool.allocate();
-    pool.release(first);
-    // allocate should return the released name (it's the only one re-added, but pool is a Set so order may vary)
-    // exhaust all others, then the last one from pool should be `first`
-    const names: string[] = [];
-    for (let i = 0; i < POOL_SIZE; i++) {
-      names.push(pool.allocate());
-    }
-    expect(names).toContain(first);
-    // none should be generated
-    for (const n of names) {
-      expect(n).not.toMatch(/^imp-\d+$/);
-    }
-  });
-
-  it("releasing a generated name does NOT add it to the pool", () => {
-    const pool = createNamePool();
-    for (let i = 0; i < POOL_SIZE; i++) pool.allocate();
-    const generated = pool.allocate(); // imp-1
-    expect(generated).toBe("imp-1");
-    pool.release(generated);
-    // next allocate should still be imp-2, not imp-1
-    expect(pool.allocate()).toBe("imp-2");
+    const name = pool.allocate();
+    pool.release(name);
+    pool.release(name); // should not throw
+    expect(pool.allocate()).not.toMatch(/^imp-\d+$/);
   });
 });

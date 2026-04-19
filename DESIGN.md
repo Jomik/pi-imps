@@ -20,7 +20,7 @@ We need a small, composable primitive: summon an agent, get its result, done.
 
 #### `summon`
 
-Summon an imp. Returns immediately with an ID and a name picked from a pool. Non-blocking — the imp runs in the background.
+Summon an imp. Returns immediately with an ID and a generated name. Non-blocking — the imp runs in the background.
 
 ```
 summon({
@@ -88,7 +88,7 @@ Ephemeral, in-memory, no persistence. Ephemeral imps inherit the parent's model;
 
 ### Names
 
-Picked from a pool, recycled when freed.
+Generated per imp, recycled when freed.
 
 ## Examples
 
