@@ -52,13 +52,15 @@ wait({
 
 Imp failures are returned as results with `failed` status, not thrown exceptions. The LLM sees which imps succeeded and which failed (with error message) and decides how to proceed. `wait` itself only throws for programmer errors (e.g. no imps to wait for).
 
+The result payload is the imp's final assistant message — no summarization or truncation. The delegator controls verbosity through its task description (e.g. "summarize briefly" vs "full analysis").
+
 #### `dismiss`
 
 Dismiss running imp(s). Useful after `wait({ mode: "first" })` to kill remaining imps.
 
 ```
 dismiss({
-  id: string,             // imp ID, name, or "all"
+  name: string,           // imp name or "all"
 })
 ```
 
@@ -86,6 +88,31 @@ Running imp count in the status line. Minimal — just the count.
 
 Ephemeral, in-memory, no persistence. Ephemeral imps inherit the parent's model; named agents use their frontmatter model.
 
+### Tools
+
+Configurable at two levels:
+
+- **Settings**: default tool allowlist for all imps
+- **Agent frontmatter**: per-agent override
+
+Absence means all tools. Empty list means no tools.
+
+At summon time, pi-imps resolves the allowlist and filters extensions accordingly — extensions that provide no allowed tools are excluded entirely (no prompt injection, no event hooks, no tools). Core pi tools (read, edit, bash, write) follow the same rule: available unless explicitly excluded.
+
+**Required extensions** (settings-only) always load on imp sessions regardless of the tool allowlist. Use for permission systems, sandboxing, or other guardrails that must not be bypassed. Agent frontmatter cannot override this.
+
+
+### Turn Limit
+
+A global safety net to prevent runaway imps. Default: 30 turns. Configurable in settings, not per-summon.
+
+The imp is unaware of the limit. It works normally until the final turn, when a directive is injected:
+
+> FINAL TURN. Do not start new work. Save any pending changes, commit your progress, and respond with: (1) what you completed, (2) what remains unfinished.
+
+After that turn the session ends. The result returned to the delegator carries a `truncated` status (distinct from `completed` or `failed`), so the LLM knows the imp was cut off and can decide whether to re-delegate the remainder.
+
+The limit is a circuit breaker, not a budget. It exists to catch genuine runaways — loops, wrong approaches, hallucination spirals — not to manage workflow. If a task legitimately needs more than 25 turns, it should be decomposed into smaller subtasks.
 ### Names
 
 Generated per imp, recycled when freed.
@@ -150,7 +177,7 @@ Full output goes to the LLM only — the rendered result stays compact.
 #### Dismiss
 
 ```
-┌ dismiss({ id: "all" })
+┌ dismiss({ name: "all" })
 └ Dismissed: otto
 ```
 
