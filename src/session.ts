@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AgentSession, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import {
   createAgentSession,
@@ -13,7 +13,7 @@ export interface SpawnImpSessionOptions {
   task: string;
   config: AgentConfig | undefined; // undefined = ephemeral
   cwd: string;
-  parentModel: Model<any>;
+  parentModel: Model<Api>;
   modelRegistry: ModelRegistry;
   signal: AbortSignal;
   onTurnEnd: (turns: number) => void;
@@ -31,8 +31,16 @@ export interface SpawnImpSessionOptions {
  */
 export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<AgentSession> {
   const {
-    task, config, cwd, parentModel, modelRegistry, signal,
-    onTurnEnd, onToolActivity, onUsageUpdate, onComplete,
+    task,
+    config,
+    cwd,
+    parentModel,
+    modelRegistry,
+    signal,
+    onTurnEnd,
+    onToolActivity,
+    onUsageUpdate,
+    onComplete,
   } = opts;
 
   const systemPrompt = config?.systemPrompt;
@@ -45,9 +53,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     systemPrompt: systemPrompt || undefined,
     extensionsOverride: (base) => ({
       ...base,
-      extensions: base.extensions.filter(
-        (ext) => !ext.resolvedPath.includes("pi-imps"),
-      ),
+      extensions: base.extensions.filter((ext) => !ext.resolvedPath.includes("pi-imps")),
     }),
   });
   await loader.reload();
@@ -78,12 +84,8 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   let lastOutput = "";
   let totalUsage = { input: 0, output: 0 };
 
-  function extractAssistantText(
-    content: Array<{ type: string; text?: string }>,
-  ) {
-    const parts = content.filter(
-      (c): c is { type: "text"; text: string } => c.type === "text",
-    );
+  function extractAssistantText(content: Array<{ type: string; text?: string }>) {
+    const parts = content.filter((c): c is { type: "text"; text: string } => c.type === "text");
     lastOutput = parts.map((c) => c.text).join("");
   }
 
@@ -93,7 +95,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     if (event.type === "tool_execution_start") {
       const toolName = event.toolName;
       const argsStr = formatToolArgs(event.args);
-      onToolActivity(`→ ${toolName}${argsStr ? " " + argsStr : ""}`);
+      onToolActivity(`→ ${toolName}${argsStr ? ` ${argsStr}` : ""}`);
     }
 
     if (event.type === "turn_end") {
@@ -102,11 +104,12 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
       // Extract usage from the assistant message
       const msg = event.message;
       if (msg.role === "assistant" && "usage" in msg) {
-        const u = (msg as any).usage;
-        if (u) {
-          totalUsage = { input: totalUsage.input + (u.input ?? 0), output: totalUsage.output + (u.output ?? 0) };
-          onUsageUpdate(totalUsage);
-        }
+        const { usage: u } = msg;
+        totalUsage = {
+          input: totalUsage.input + u.input,
+          output: totalUsage.output + u.output,
+        };
+        onUsageUpdate(totalUsage);
       }
     }
 
@@ -145,7 +148,7 @@ function formatToolArgs(args: Record<string, unknown>): string {
   // Show first string arg value, truncated
   for (const [, v] of Object.entries(args)) {
     if (typeof v === "string" && v.length > 0) {
-      return v.length > 60 ? v.slice(0, 57) + "..." : v;
+      return v.length > 60 ? `${v.slice(0, 57)}...` : v;
     }
   }
   return "";

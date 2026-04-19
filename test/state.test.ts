@@ -1,10 +1,12 @@
-import { describe, it, expect } from "vitest";
-import { findImp, uncollectedImps, runningImps, allImps } from "../src/state.js";
+import { describe, expect, it } from "vitest";
+import { allImps, findImp, runningImps, uncollectedImps } from "../src/state.js";
 import type { Imp } from "../src/types.js";
 
 function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
   let resolveDone!: () => void;
-  const done = new Promise<void>((r) => { resolveDone = r; });
+  const done = new Promise<void>((r) => {
+    resolveDone = r;
+  });
   return {
     agentName: "ephemeral",
     task: "test task",

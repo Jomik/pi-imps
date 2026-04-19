@@ -1,7 +1,22 @@
 const POOL = [
-  "alice", "bob", "carol", "dave", "eve", "frank",
-  "grace", "hank", "iris", "jake", "kate", "leo",
-  "mona", "nick", "olive", "pete", "quinn", "rosa",
+  "alice",
+  "bob",
+  "carol",
+  "dave",
+  "eve",
+  "frank",
+  "grace",
+  "hank",
+  "iris",
+  "jake",
+  "kate",
+  "leo",
+  "mona",
+  "nick",
+  "olive",
+  "pete",
+  "quinn",
+  "rosa",
 ];
 
 export function createNamePool() {

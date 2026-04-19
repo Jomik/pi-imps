@@ -1,10 +1,10 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { AgentConfig, Imp } from "./types.js";
-import { runningImps } from "./state.js";
 import { discoverAgents } from "./agents.js";
 import { buildAgentsBlock } from "./format.js";
 import { createNamePool } from "./names.js";
-import { summonTool, waitTool, dismissTool, listImpsTool, dismissAllImps } from "./tools.js";
+import { runningImps } from "./state.js";
+import { dismissAllImps, dismissTool, listImpsTool, summonTool, waitTool } from "./tools.js";
+import type { AgentConfig, Imp } from "./types.js";
 
 export default function (pi: ExtensionAPI): void {
   const imps: Map<string, Imp> = new Map();
@@ -22,17 +22,14 @@ export default function (pi: ExtensionAPI): void {
   pi.on("before_agent_start", (event) => {
     if (agents.length === 0) return;
     const block = buildAgentsBlock(agents);
-    return { systemPrompt: event.systemPrompt + "\n\n" + block };
+    return { systemPrompt: `${event.systemPrompt}\n\n${block}` };
   });
 
   // ── Footer: running imp count ──────────────────────────────────────────
 
   function updateFooter(ctx: { ui: { setStatus(key: string, text: string | undefined): void } }) {
     const count = runningImps(imps).length;
-    ctx.ui.setStatus(
-      "imps",
-      count > 0 ? `🧿 ${count} imp${count !== 1 ? "s" : ""}` : undefined,
-    );
+    ctx.ui.setStatus("imps", count > 0 ? `🧿 ${count} imp${count !== 1 ? "s" : ""}` : undefined);
   }
 
   pi.on("turn_start", (_event, ctx) => updateFooter(ctx));

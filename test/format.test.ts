@@ -1,16 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildAgentsBlock,
-  formatImpStatus,
-  formatWaitResult,
-  formatSummonResult,
   formatDismissResult,
+  formatImpStatus,
+  formatSummonResult,
+  formatWaitResult,
 } from "../src/format.js";
 import type { AgentConfig, Imp } from "../src/types.js";
 
 function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
   let resolveDone!: () => void;
-  const done = new Promise<void>((r) => { resolveDone = r; });
+  const done = new Promise<void>((r) => {
+    resolveDone = r;
+  });
   return {
     agentName: "ephemeral",
     task: "test",
@@ -44,7 +46,13 @@ describe("buildAgentsBlock", () => {
   });
 
   it("returns XML with correct structure", () => {
-    const result = buildAgentsBlock([makeAgent({ name: "coder", description: "Writes code", source: "project" })]);
+    const result = buildAgentsBlock([
+      makeAgent({
+        name: "coder",
+        description: "Writes code",
+        source: "project",
+      }),
+    ]);
     expect(result).toContain("<available_agents>");
     expect(result).toContain("</available_agents>");
     expect(result).toContain("<name>coder</name>");
@@ -157,7 +165,7 @@ describe("formatWaitResult", () => {
       status: "completed",
       output: "All tests passed.",
     });
-    const s = formatWaitResult([imp], "all");
+    const s = formatWaitResult([imp]);
     expect(s).toContain("alice");
     expect(s).toContain("completed");
     expect(s).toContain("All tests passed.");
@@ -169,7 +177,7 @@ describe("formatWaitResult", () => {
       status: "failed",
       error: "segfault",
     });
-    const s = formatWaitResult([imp], "first");
+    const s = formatWaitResult([imp]);
     expect(s).toContain("bob");
     expect(s).toContain("failed");
     expect(s).toContain("segfault");

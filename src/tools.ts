@@ -1,27 +1,20 @@
-import { Type } from "@sinclair/typebox";
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
   ExtensionContext,
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
-import type { AgentConfig, Imp } from "./types.js";
-import { findImp, runningImps, uncollectedImps, allImps } from "./state.js";
-import {
-  formatSummonResult,
-  formatWaitResult,
-  formatImpStatus,
-  formatDismissResult,
-} from "./format.js";
+import { Type } from "@sinclair/typebox";
+import { formatDismissResult, formatImpStatus, formatSummonResult, formatWaitResult } from "./format.js";
 import { spawnImpSession } from "./session.js";
+import { allImps, findImp, uncollectedImps } from "./state.js";
+import type { AgentConfig, Imp } from "./types.js";
 
 // ─── summon ────────────────────────────────────────────────────────────────
 
 const SummonParams = Type.Object({
   task: Type.String({ description: "What the imp should do" }),
-  agent: Type.Optional(
-    Type.String({ description: "Named agent to use, or omit for ephemeral" }),
-  ),
+  agent: Type.Optional(Type.String({ description: "Named agent to use, or omit for ephemeral" })),
 });
 
 export function summonTool(
@@ -56,7 +49,16 @@ export function summonTool(
         config = agents().find((a) => a.name === params.agent);
         if (!config) {
           return {
-            content: [{ type: "text", text: `Unknown agent: ${params.agent}. Available: ${agents().map((a) => a.name).join(", ") || "none"}` }],
+            content: [
+              {
+                type: "text",
+                text: `Unknown agent: ${params.agent}. Available: ${
+                  agents()
+                    .map((a) => a.name)
+                    .join(", ") || "none"
+                }`,
+              },
+            ],
             details: undefined,
           };
         }
@@ -65,7 +67,9 @@ export function summonTool(
 
       // Create done promise for wait coordination
       let resolveDone!: () => void;
-      const done = new Promise<void>((resolve) => { resolveDone = resolve; });
+      const done = new Promise<void>((resolve) => {
+        resolveDone = resolve;
+      });
 
       const controller = new AbortController();
 
@@ -105,9 +109,15 @@ export function summonTool(
         parentModel,
         modelRegistry: ctx.modelRegistry,
         signal: controller.signal,
-        onTurnEnd: (turns) => { imp.turns = turns; },
-        onToolActivity: (activity) => { imp.activity = activity; },
-        onUsageUpdate: (tokens) => { imp.tokens = tokens; },
+        onTurnEnd: (turns) => {
+          imp.turns = turns;
+        },
+        onToolActivity: (activity) => {
+          imp.activity = activity;
+        },
+        onUsageUpdate: (tokens) => {
+          imp.tokens = tokens;
+        },
         onComplete: (result) => {
           if (imp.status === "dismissed") return; // already dismissed
           imp.output = result.output;
@@ -139,17 +149,22 @@ export function summonTool(
 
 const WaitParams = Type.Object({
   mode: Type.Union([Type.Literal("all"), Type.Literal("first")], {
-    description: 'all: wait for every imp, first: return when any completes',
+    description: "all: wait for every imp, first: return when any completes",
   }),
 });
 
 interface WaitDetails {
-  imps: Array<{ name: string; agentName: string; status: string; activity?: string; turns: number; tokens: number }>;
+  imps: Array<{
+    name: string;
+    agentName: string;
+    status: string;
+    activity?: string;
+    turns: number;
+    tokens: number;
+  }>;
 }
 
-export function waitTool(
-  imps: Map<string, Imp>,
-): ToolDefinition<typeof WaitParams, WaitDetails> {
+export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitParams, WaitDetails> {
   return {
     name: "wait",
     label: "Wait for Imps",
@@ -164,7 +179,7 @@ export function waitTool(
     async execute(
       _toolCallId: string,
       params: { mode: "all" | "first" },
-      signal: AbortSignal | undefined,
+      _signal: AbortSignal | undefined,
       onUpdate: AgentToolUpdateCallback<WaitDetails> | undefined,
       _ctx: ExtensionContext,
     ): Promise<AgentToolResult<WaitDetails>> {
@@ -220,7 +235,7 @@ export function waitTool(
         emitUpdate();
 
         return {
-          content: [{ type: "text", text: formatWaitResult(resolved, params.mode) }],
+          content: [{ type: "text", text: formatWaitResult(resolved) }],
           details: {
             imps: resolved.map((imp) => ({
               name: imp.name,
@@ -253,9 +268,7 @@ export function dismissTool(
     name: "dismiss",
     label: "Dismiss Imp",
     description: 'Abort running imp(s). Pass an imp name or "all".',
-    promptGuidelines: [
-      "Use dismiss after wait({ mode: 'first' }) to kill remaining imps you no longer need.",
-    ],
+    promptGuidelines: ["Use dismiss after wait({ mode: 'first' }) to kill remaining imps you no longer need."],
     parameters: DismissParams,
     async execute(
       _toolCallId: string,
@@ -300,10 +313,7 @@ export function dismissTool(
   };
 }
 
-function dismissImp(
-  imp: Imp,
-  namePool: { release(name: string): void },
-): void {
+function dismissImp(imp: Imp, namePool: { release(name: string): void }): void {
   imp.status = "dismissed";
   imp.completedAt = Date.now();
   imp.controller.abort();
@@ -315,9 +325,7 @@ function dismissImp(
 
 const ListImpsParams = Type.Object({});
 
-export function listImpsTool(
-  imps: Map<string, Imp>,
-): ToolDefinition<typeof ListImpsParams> {
+export function listImpsTool(imps: Map<string, Imp>): ToolDefinition<typeof ListImpsParams> {
   return {
     name: "list_imps",
     label: "List Imps",
@@ -352,10 +360,7 @@ export function listImpsTool(
 
 // ─── helpers for shutdown ──────────────────────────────────────────────────
 
-export function dismissAllImps(
-  imps: Map<string, Imp>,
-  namePool: { release(name: string): void },
-): void {
+export function dismissAllImps(imps: Map<string, Imp>, namePool: { release(name: string): void }): void {
   for (const imp of imps.values()) {
     if (imp.status === "running") {
       dismissImp(imp, namePool);

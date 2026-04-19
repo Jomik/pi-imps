@@ -42,7 +42,7 @@ export function formatImpStatus(imp: Imp): string {
 /**
  * Format wait results for the LLM.
  */
-export function formatWaitResult(imps: Imp[], mode: "all" | "first"): string {
+export function formatWaitResult(imps: Imp[]): string {
   const lines: string[] = [];
 
   for (const imp of imps) {
@@ -81,10 +81,14 @@ export function formatDismissResult(dismissed: Imp[]): string {
 
 function statusLabel(status: ImpStatus): string {
   switch (status) {
-    case "completed": return "completed";
-    case "failed": return "failed";
-    case "dismissed": return "dismissed";
-    case "running": return "running";
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "dismissed":
+      return "dismissed";
+    case "running":
+      return "running";
   }
 }
 
