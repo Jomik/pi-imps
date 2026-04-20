@@ -27,15 +27,16 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
       continue;
     }
 
-    const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
+    const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
     if (!frontmatter.description) continue;
 
-    const name = frontmatter.name ?? entry.name.replace(/\.md$/, "");
+    const name = typeof frontmatter.name === "string" ? frontmatter.name : entry.name.replace(/\.md$/, "");
 
     agents.push({
       name,
-      description: frontmatter.description,
-      model: frontmatter.model,
+      description: frontmatter.description as string,
+      model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+      tools: parseToolsList(frontmatter.tools),
       systemPrompt: body.trim(),
       source,
       filePath,
@@ -63,4 +64,23 @@ export function discoverAgents(cwd: string): AgentConfig[] {
   for (const a of projectAgents) byName.set(a.name, a);
 
   return Array.from(byName.values());
+}
+
+/**
+ * Parse tools from frontmatter. Handles:
+ * - YAML array: ["read", "bash"]
+ * - Comma-separated string: "read, bash"
+ * - Absent/null/other: undefined (all tools)
+ */
+export function parseToolsList(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    return value.filter((v): v is string => typeof v === "string" && v.length > 0);
+  }
+  if (typeof value === "string" && value.length > 0) {
+    return value
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+  }
+  return undefined;
 }

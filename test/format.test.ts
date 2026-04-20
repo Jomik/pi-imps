@@ -127,6 +127,23 @@ describe("formatImpStatus", () => {
     const s = formatImpStatus(imp);
     expect(s).toContain("dismissed");
   });
+
+  it("truncated — shows warning, turns, tokens", () => {
+    const imp = makeImp({
+      name: "fred",
+      agentName: "mason",
+      status: "truncated",
+      turns: 30,
+      tokens: { input: 5000, output: 2000 },
+    });
+    const s = formatImpStatus(imp);
+    expect(s).toContain("fred");
+    expect(s).toContain("(mason)");
+    expect(s).toContain("!");
+    expect(s).toContain("truncated");
+    expect(s).toContain("30 turns");
+    expect(s).toContain("7.0k");
+  });
 });
 
 // --- formatSummonResult ---
@@ -181,5 +198,18 @@ describe("formatWaitResult", () => {
     expect(s).toContain("bob");
     expect(s).toContain("failed");
     expect(s).toContain("segfault");
+  });
+
+  it("includes output for truncated imp with truncated label", () => {
+    const imp = makeImp({
+      name: "carol",
+      status: "truncated",
+      output: "Completed X. Remaining: Y.",
+      turns: 30,
+    });
+    const s = formatWaitResult([imp]);
+    expect(s).toContain("carol");
+    expect(s).toContain("truncated");
+    expect(s).toContain("Completed X. Remaining: Y.");
   });
 });

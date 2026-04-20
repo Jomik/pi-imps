@@ -36,6 +36,8 @@ export function formatImpStatus(imp: Imp): string {
       return `${base}: ✗ ${imp.error ?? "unknown error"}`;
     case "dismissed":
       return `${base}: dismissed`;
+    case "truncated":
+      return `${base}: ! truncated at ${imp.turns} turns, ${formatTokens(imp.tokens.input + imp.tokens.output)} tokens`;
   }
 }
 
@@ -89,6 +91,8 @@ function statusLabel(status: ImpStatus): string {
       return "dismissed";
     case "running":
       return "running";
+    case "truncated":
+      return "truncated";
   }
 }
 

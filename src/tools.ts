@@ -8,7 +8,7 @@ import { Type } from "@sinclair/typebox";
 import { formatDismissResult, formatImpStatus, formatSummonResult, formatWaitResult } from "./format.js";
 import { spawnImpSession } from "./session.js";
 import { allImps, findImp, uncollectedImps } from "./state.js";
-import type { AgentConfig, Imp } from "./types.js";
+import type { AgentConfig, Imp, ImpSettings } from "./types.js";
 
 // ─── summon ────────────────────────────────────────────────────────────────
 
@@ -21,6 +21,7 @@ export function summonTool(
   imps: Map<string, Imp>,
   agents: () => AgentConfig[],
   namePool: { allocate(): string; release(name: string): void },
+  settings: () => ImpSettings,
 ): ToolDefinition<typeof SummonParams> {
   return {
     name: "summon",
@@ -109,6 +110,7 @@ export function summonTool(
         parentModel,
         modelRegistry: ctx.modelRegistry,
         signal: controller.signal,
+        settings: settings(),
         onTurnEnd: (turns) => {
           imp.turns = turns;
         },
@@ -122,20 +124,34 @@ export function summonTool(
           if (imp.status === "dismissed") return; // already dismissed
           imp.output = result.output;
           imp.completedAt = Date.now();
-          if (result.error) {
+          if (result.truncated) {
+            imp.status = "truncated";
+          } else if (result.error) {
             imp.status = "failed";
             imp.error = result.error;
           } else {
             imp.status = "completed";
           }
+          namePool.release(imp.name);
           resolveDone();
         },
-      }).catch((err) => {
-        imp.status = "failed";
-        imp.error = err instanceof Error ? err.message : String(err);
-        imp.completedAt = Date.now();
-        resolveDone();
-      });
+      })
+        .then((session) => {
+          if (imp.status === "dismissed") {
+            // Dismissed before session was ready — abort now
+            session.abort().catch(() => {});
+            return;
+          }
+          imp.session = session;
+        })
+        .catch((err) => {
+          if (imp.status === "dismissed") return; // already dismissed
+          imp.status = "failed";
+          imp.error = err instanceof Error ? err.message : String(err);
+          imp.completedAt = Date.now();
+          namePool.release(imp.name);
+          resolveDone();
+        });
 
       return {
         content: [{ type: "text", text: formatSummonResult(name, agentName) }],
@@ -219,11 +235,11 @@ export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitPara
 
         if (params.mode === "all") {
           await Promise.all(waiting.map((imp) => imp.done));
-          resolved = waiting;
+          resolved = waiting.filter((imp) => imp.status !== "dismissed");
         } else {
-          // Race: wait for first to finish
-          await Promise.race(waiting.map((imp) => imp.done));
-          resolved = waiting.filter((imp) => imp.status !== "running");
+          // Race: resolve with the actual winner, not insertion order
+          const winner = await Promise.race(waiting.map((imp) => imp.done.then(() => imp)));
+          resolved = winner && winner.status !== "dismissed" ? [winner] : [];
         }
 
         // Mark collected
@@ -317,6 +333,7 @@ function dismissImp(imp: Imp, namePool: { release(name: string): void }): void {
   imp.status = "dismissed";
   imp.completedAt = Date.now();
   imp.controller.abort();
+  imp.session?.abort().catch(() => {});
   imp.resolveDone();
   namePool.release(imp.name);
 }

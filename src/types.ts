@@ -1,4 +1,4 @@
-export type ImpStatus = "running" | "completed" | "failed" | "dismissed";
+export type ImpStatus = "running" | "completed" | "failed" | "dismissed" | "truncated";
 
 export interface Imp {
   readonly name: string;
@@ -14,6 +14,7 @@ export interface Imp {
   output?: string;
   error?: string;
   activity?: string; // live: "→ bash npm test"
+  session?: { abort(): Promise<void> }; // set once session is spawned
   /** Resolves when the imp finishes (completed/failed). Never rejects. */
   readonly done: Promise<void>;
   readonly resolveDone: () => void;
@@ -25,7 +26,18 @@ export interface AgentConfig {
   readonly name: string;
   readonly description: string;
   readonly model?: string;
+  readonly tools?: string[];
   readonly systemPrompt: string;
   readonly source: AgentSource;
   readonly filePath: string;
+}
+
+/** Extension settings under the "pi-imps" key in settings.json */
+export interface ImpSettings {
+  /** Max turns before an imp is cut off. Default: 30 */
+  turnLimit: number;
+  /** Default tool allowlist for all imps. undefined = all tools allowed */
+  toolAllowlist: string[] | undefined;
+  /** Extensions that always load on imp sessions regardless of tool filtering */
+  additionalExtensions: string[];
 }

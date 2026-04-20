@@ -20,13 +20,13 @@ We need a small, composable primitive: summon an agent, get its result, done.
 
 #### `summon`
 
-Summon an imp. Returns immediately with an ID and a generated name. Non-blocking — the imp runs in the background.
+Summon an imp. Returns immediately with a generated name. Non-blocking — the imp runs in the background.
 
 ```
 summon({
   task: string,           // what the imp should do
   agent?: string,         // named agent, or ephemeral
-}) → { id: string, name: string }
+}) → { name: string }
 ```
 
 The LLM can call `summon` multiple times (including parallel tool calls) to launch several imps, then collect results with `wait`.
@@ -50,7 +50,7 @@ wait({
 
 `wait` is chainable. After `wait({ mode: "first" })` returns one result, call `wait` again to collect the rest.
 
-Imp failures are returned as results with `failed` status, not thrown exceptions. The LLM sees which imps succeeded and which failed (with error message) and decides how to proceed. `wait` itself only throws for programmer errors (e.g. no imps to wait for).
+Imp failures are returned as results with `failed` status, not thrown exceptions. The LLM sees which imps succeeded and which failed (with error message) and decides how to proceed. If no uncollected imps exist, `wait` returns an empty result.
 
 The result payload is the imp's final assistant message — no summarization or truncation. The delegator controls verbosity through its task description (e.g. "summarize briefly" vs "full analysis").
 
@@ -99,7 +99,7 @@ Absence means all tools. Empty list means no tools.
 
 At summon time, pi-imps resolves the allowlist and filters extensions accordingly — extensions that provide no allowed tools are excluded entirely (no prompt injection, no event hooks, no tools). Core pi tools (read, edit, bash, write) follow the same rule: available unless explicitly excluded.
 
-**Required extensions** (settings-only) always load on imp sessions regardless of the tool allowlist. Use for permission systems, sandboxing, or other guardrails that must not be bypassed. Agent frontmatter cannot override this.
+**Additional extensions** (settings-only) always load on imp sessions regardless of the tool allowlist. Use for permission systems, sandboxing, logging, or other extensions that must not be filtered out. Agent frontmatter cannot override this.
 
 
 ### Turn Limit
