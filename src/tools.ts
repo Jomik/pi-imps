@@ -4,8 +4,15 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { formatDismissResult, formatImpStatus, formatSummonResult, formatWaitResult } from "./format.js";
+import {
+  formatDismissResult,
+  formatImpStatus,
+  formatSummonResult,
+  formatWaitResult,
+  formatWaitResultCompact,
+} from "./format.js";
 import { spawnImpSession } from "./session.js";
 import { allImps, findImp, uncollectedImps } from "./state.js";
 import type { AgentConfig, Imp, ImpSettings } from "./types.js";
@@ -266,6 +273,19 @@ export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitPara
       } finally {
         clearInterval(interval);
       }
+    },
+    renderCall(args, theme: Theme, context) {
+      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      const mode = args.mode === "first" ? "race" : "all";
+      text.setText(theme.fg("toolTitle", theme.bold("wait")) + " " + theme.fg("dim", mode));
+      return text;
+    },
+    renderResult(result, _options, theme: Theme, context) {
+      const mode = context.args?.mode ?? "all";
+      const compact = formatWaitResultCompact(result.details?.imps ?? [], mode, theme);
+      const text = (context.lastComponent as Text) ?? new Text("", 0, 0);
+      text.setText(compact);
+      return text;
     },
   };
 }

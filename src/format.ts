@@ -27,7 +27,7 @@ export function formatImpStatus(imp: Imp): string {
 
   switch (imp.status) {
     case "running": {
-      const activity = imp.activity ?? "working...";
+      const activity = imp.activity ?? "◌";
       return `${base}: ${activity} — ${imp.turns} turns, ${formatTokens(imp.tokens.input + imp.tokens.output)} tokens`;
     }
     case "completed":
@@ -99,4 +99,67 @@ function statusLabel(status: ImpStatus): string {
 function formatTokens(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
+}
+interface CompactImp {
+  name: string;
+  agentName: string;
+  status: string;
+  activity?: string;
+  turns: number;
+  tokens: number;
+}
+
+function formatCompactStatus(imp: CompactImp, theme?: Theme): string {
+  const name = theme ? theme.fg("accent", imp.name) : imp.name;
+  const agent =
+    imp.agentName === "ephemeral" ? "" : theme ? " the " + theme.fg("muted", imp.agentName) : ` (${imp.agentName})`;
+  const base = `${name}${agent}`;
+  const tokens = formatTokens(imp.tokens);
+  const dim = (s: string) => (theme ? theme.fg("dim", s) : s);
+  switch (imp.status) {
+    case "running": {
+      const activity = imp.activity ?? dim("◌");
+      return `${base}: ${activity} ${dim(`\u2014 ${imp.turns} turns, ${tokens} tokens`)}`;
+    }
+    case "completed":
+      return `${base}: ${theme ? theme.fg("success", "\u2713") : "\u2713"} ${dim(`${imp.turns} turns, ${tokens} tokens`)}`;
+    case "failed":
+      return `${base}: ${theme ? theme.fg("error", "\u2717 failed") : "\u2717 failed"}`;
+    case "dismissed":
+      return `${base}: ${dim("dismissed")}`;
+    case "truncated":
+      return `${base}: ${theme ? theme.fg("warning", "\u26a0") : "\u26a0"} ${dim(`truncated at ${imp.turns} turns, ${tokens} tokens`)}`;
+    default:
+      return `${base}: ${imp.status}`;
+  }
+}
+
+/**
+ * Format compact wait result for TUI display (themed).
+ */
+export function formatWaitResultCompact(imps: CompactImp[], mode: "all" | "first", theme?: Theme): string {
+  if (imps.length === 0) return theme ? theme.fg("dim", "No uncollected imps.") : "No uncollected imps.";
+  const lines = imps.map((imp) => formatCompactStatus(imp, theme));
+  if (mode === "all") {
+    const allDone = imps.every((i) => i.status !== "running");
+    if (allDone) lines.push(theme ? theme.fg("success", "All completed") : "All completed");
+  } else {
+    const winner = imps[0];
+    if (winner && winner.status !== "running") {
+      const name = theme ? theme.fg("accent", winner.name) : winner.name;
+      const agent =
+        winner.agentName === "ephemeral"
+          ? ""
+          : theme
+            ? " the " + theme.fg("muted", winner.agentName)
+            : ` (${winner.agentName})`;
+      const tokens = formatTokens(winner.tokens);
+      const stats = `${winner.turns} turns, ${tokens} tokens`;
+      const line = `${name}${agent} finished first ${theme ? theme.fg("dim", "\u2014 " + stats) : "\u2014 " + stats}`;
+      return line;
+    }
+    // Race still running — show all imp statuses
+    return lines.join("\n");
+  }
+  return lines.join("\n");
 }

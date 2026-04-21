@@ -5,6 +5,7 @@ import {
   formatImpStatus,
   formatSummonResult,
   formatWaitResult,
+  formatWaitResultCompact,
 } from "../src/format.js";
 import type { AgentConfig, Imp } from "../src/types.js";
 
@@ -211,5 +212,91 @@ describe("formatWaitResult", () => {
     expect(s).toContain("carol");
     expect(s).toContain("truncated");
     expect(s).toContain("Completed X. Remaining: Y.");
+  });
+});
+
+// --- formatWaitResultCompact ---
+
+describe("formatWaitResultCompact", () => {
+  it("empty imps returns no uncollected message", () => {
+    expect(formatWaitResultCompact([], "all")).toBe("No uncollected imps.");
+  });
+
+  it("all mode shows status lines and 'All completed' footer", () => {
+    const imps = [
+      {
+        name: "alice",
+        agentName: "sentinel",
+        status: "completed",
+        turns: 3,
+        tokens: 12400,
+      },
+      {
+        name: "bob",
+        agentName: "mason",
+        status: "completed",
+        turns: 5,
+        tokens: 18100,
+      },
+    ];
+    const s = formatWaitResultCompact(imps, "all");
+    expect(s).toContain("alice");
+    expect(s).toContain("bob");
+    expect(s).toContain("All completed");
+  });
+
+  it("all mode omits footer when imps still running", () => {
+    const imps = [
+      {
+        name: "alice",
+        agentName: "sentinel",
+        status: "completed",
+        turns: 3,
+        tokens: 500,
+      },
+      {
+        name: "bob",
+        agentName: "ephemeral",
+        status: "running",
+        turns: 1,
+        tokens: 100,
+      },
+    ];
+    const s = formatWaitResultCompact(imps, "all");
+    expect(s).not.toContain("All completed");
+  });
+
+  it("first mode shows winner one-liner with stats", () => {
+    const imps = [
+      {
+        name: "kevin",
+        agentName: "cartographer",
+        status: "completed",
+        turns: 2,
+        tokens: 8300,
+      },
+    ];
+    const s = formatWaitResultCompact(imps, "first");
+    expect(s).toContain("kevin");
+    expect(s).toContain("cartographer");
+    expect(s).toContain("finished first");
+    expect(s).toContain("2 turns");
+    expect(s).toContain("8.3k tokens");
+  });
+
+  it("first mode with ephemeral omits agent name", () => {
+    const imps = [
+      {
+        name: "bob",
+        agentName: "ephemeral",
+        status: "completed",
+        turns: 1,
+        tokens: 500,
+      },
+    ];
+    const s = formatWaitResultCompact(imps, "first");
+    expect(s).toContain("bob");
+    expect(s).toContain("finished first");
+    expect(s).not.toContain("ephemeral");
   });
 });
