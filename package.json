@@ -1,8 +1,21 @@
 {
   "name": "pi-imps",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Lightweight subagent orchestration for pi.",
   "license": "MIT",
+  "author": "Jonas Damtoft",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jomik/pi-imps.git"
+  },
+  "homepage": "https://github.com/Jomik/pi-imps",
+  "keywords": [
+    "pi",
+    "agent",
+    "subagent",
+    "orchestration",
+    "llm"
+  ],
   "type": "module",
   "files": [
     "src",
