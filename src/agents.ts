@@ -84,3 +84,21 @@ export function parseToolsList(value: unknown): string[] | undefined {
   }
   return undefined;
 }
+
+/**
+ * Build the <available_agents> XML block for system prompt injection.
+ */
+export function buildAgentsBlock(agents: AgentConfig[]): string {
+  if (agents.length === 0) return "";
+
+  const lines = ["<available_agents>"];
+  for (const a of agents) {
+    lines.push("  <agent>");
+    lines.push(`    <name>${a.name}</name>`);
+    lines.push(`    <description>${a.description}${a.model ? ` [model: ${a.model}]` : ""}</description>`);
+    lines.push(`    <source>${a.source}</source>`);
+    lines.push("  </agent>");
+  }
+  lines.push("</available_agents>");
+  return lines.join("\n");
+}

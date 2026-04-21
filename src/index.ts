@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { discoverAgents } from "./agents.js";
-import { buildAgentsBlock } from "./format.js";
+import { buildAgentsBlock, discoverAgents } from "./agents.js";
 import { createNamePool } from "./names.js";
 import { loadImpSettings } from "./settings.js";
 import { runningImps } from "./state.js";
@@ -31,7 +30,7 @@ export default function (pi: ExtensionAPI): void {
 
   function updateFooter(ctx: { ui: { setStatus(key: string, text: string | undefined): void } }) {
     const count = runningImps(imps).length;
-    ctx.ui.setStatus("imps", count > 0 ? `🧿 ${count} imp${count !== 1 ? "s" : ""}` : undefined);
+    ctx.ui.setStatus("imps", count > 0 ? `${count} imp${count !== 1 ? "s" : ""}` : undefined);
   }
 
   pi.on("turn_start", (_event, ctx) => updateFooter(ctx));

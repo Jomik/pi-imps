@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildAgentsBlock,
-  formatDismissResult,
-  formatImpStatus,
-  formatSummonDisplay,
-  formatSummonResult,
-  formatWaitResult,
-  formatWaitResultCompact,
-} from "../src/format.js";
+import { buildAgentsBlock } from "../src/agents.js";
+import { formatSummonDisplay, formatWaitDisplay } from "../src/display.js";
 import type { AgentConfig, Imp } from "../src/types.js";
 
 function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
@@ -39,6 +32,12 @@ function makeAgent(overrides: Partial<AgentConfig> & { name: string }): AgentCon
   };
 }
 
+// Minimal theme stub that wraps text in markers for assertion
+const theme = {
+  fg: (_color: string, text: string) => `[${_color}:${text}]`,
+  // biome-ignore lint/suspicious/noExplicitAny: minimal theme stub for tests
+} as any;
+
 // --- buildAgentsBlock ---
 
 describe("buildAgentsBlock", () => {
@@ -67,104 +66,9 @@ describe("buildAgentsBlock", () => {
   });
 });
 
-// --- formatImpStatus ---
-
-describe("formatImpStatus", () => {
-  it("running — shows activity, turns, tokens", () => {
-    const imp = makeImp({
-      name: "alice",
-      agentName: "coder",
-      status: "running",
-      activity: "→ bash npm test",
-      turns: 3,
-      tokens: { input: 500, output: 200 },
-    });
-    const s = formatImpStatus(imp);
-    expect(s).toContain("alice");
-    expect(s).toContain("(coder)");
-    expect(s).toContain("→ bash npm test");
-    expect(s).toContain("3 turns");
-    expect(s).toContain("700");
-  });
-
-  it("running — ephemeral agent omits parens", () => {
-    const imp = makeImp({
-      name: "bob",
-      agentName: "ephemeral",
-      status: "running",
-      turns: 1,
-      tokens: { input: 0, output: 0 },
-    });
-    const s = formatImpStatus(imp);
-    expect(s).toMatch(/^bob:/);
-  });
-
-  it("completed — shows checkmark, turns, tokens", () => {
-    const imp = makeImp({
-      name: "carol",
-      status: "completed",
-      turns: 5,
-      tokens: { input: 1500, output: 500 },
-    });
-    const s = formatImpStatus(imp);
-    expect(s).toContain("✓");
-    expect(s).toContain("5 turns");
-    expect(s).toContain("2.0k");
-  });
-
-  it("failed — shows error", () => {
-    const imp = makeImp({
-      name: "dave",
-      status: "failed",
-      error: "timeout",
-    });
-    const s = formatImpStatus(imp);
-    expect(s).toContain("✗");
-    expect(s).toContain("timeout");
-  });
-
-  it("dismissed — shows dismissed", () => {
-    const imp = makeImp({ name: "eve", status: "dismissed" });
-    const s = formatImpStatus(imp);
-    expect(s).toContain("dismissed");
-  });
-
-  it("truncated — shows warning, turns, tokens", () => {
-    const imp = makeImp({
-      name: "fred",
-      agentName: "mason",
-      status: "truncated",
-      turns: 30,
-      tokens: { input: 5000, output: 2000 },
-    });
-    const s = formatImpStatus(imp);
-    expect(s).toContain("fred");
-    expect(s).toContain("(mason)");
-    expect(s).toContain("!");
-    expect(s).toContain("truncated");
-    expect(s).toContain("30 turns");
-    expect(s).toContain("7.0k");
-  });
-});
-
-// --- formatSummonResult ---
-
-describe("formatSummonResult", () => {
-  it("includes name and agent", () => {
-    const s = formatSummonResult("alice", "coder");
-    expect(s).toContain("alice");
-    expect(s).toContain("coder");
-  });
-});
-
 // --- formatSummonDisplay ---
 
 describe("formatSummonDisplay", () => {
-  // Minimal theme stub that wraps text in markers for assertion
-  const theme = {
-    fg: (_color: string, text: string) => `[${_color}:${text}]`,
-  } as any;
-
   it("named agent uses 'the' phrasing", () => {
     const s = formatSummonDisplay("alice", "coder", theme);
     expect(s).toContain("alice");
@@ -181,144 +85,86 @@ describe("formatSummonDisplay", () => {
   });
 });
 
-// --- formatDismissResult ---
+// --- formatWaitDisplay ---
 
-describe("formatDismissResult", () => {
-  it("empty array says no imps", () => {
-    expect(formatDismissResult([])).toBe("No imps to dismiss.");
-  });
-
-  it("lists dismissed names", () => {
-    const a = makeImp({ name: "alice" });
-    const b = makeImp({ name: "bob" });
-    const s = formatDismissResult([a, b]);
-    expect(s).toContain("alice");
-    expect(s).toContain("bob");
-    expect(s).toMatch(/^Dismissed:/);
-  });
-});
-
-// --- formatWaitResult ---
-
-describe("formatWaitResult", () => {
-  it("includes output for completed imp", () => {
-    const imp = makeImp({
-      name: "alice",
-      status: "completed",
-      output: "All tests passed.",
-    });
-    const s = formatWaitResult([imp]);
-    expect(s).toContain("alice");
-    expect(s).toContain("completed");
-    expect(s).toContain("All tests passed.");
-  });
-
-  it("includes error for failed imp", () => {
-    const imp = makeImp({
-      name: "bob",
-      status: "failed",
-      error: "segfault",
-    });
-    const s = formatWaitResult([imp]);
-    expect(s).toContain("bob");
-    expect(s).toContain("failed");
-    expect(s).toContain("segfault");
-  });
-
-  it("includes output for truncated imp with truncated label", () => {
-    const imp = makeImp({
-      name: "carol",
-      status: "truncated",
-      output: "Completed X. Remaining: Y.",
-      turns: 30,
-    });
-    const s = formatWaitResult([imp]);
-    expect(s).toContain("carol");
-    expect(s).toContain("truncated");
-    expect(s).toContain("Completed X. Remaining: Y.");
-  });
-});
-
-// --- formatWaitResultCompact ---
-
-describe("formatWaitResultCompact", () => {
+describe("formatWaitDisplay", () => {
   it("empty imps returns no uncollected message", () => {
-    expect(formatWaitResultCompact([], "all")).toBe("No uncollected imps.");
+    expect(formatWaitDisplay([], "all", theme)).toContain("No uncollected imps.");
   });
 
-  it("all mode shows status lines and 'All completed' footer", () => {
+  it("all mode shows status lines", () => {
     const imps = [
-      {
+      makeImp({
         name: "alice",
         agentName: "sentinel",
         status: "completed",
         turns: 3,
-        tokens: 12400,
-      },
-      {
+        tokens: { input: 6200, output: 6200 },
+      }),
+      makeImp({
         name: "bob",
         agentName: "mason",
         status: "completed",
         turns: 5,
-        tokens: 18100,
-      },
+        tokens: { input: 9000, output: 9100 },
+      }),
     ];
-    const s = formatWaitResultCompact(imps, "all");
+    const s = formatWaitDisplay(imps, "all", theme);
     expect(s).toContain("alice");
     expect(s).toContain("bob");
-    expect(s).toContain("All completed");
   });
 
-  it("all mode omits footer when imps still running", () => {
+  it("all mode with mixed status does not show first-mode winner line", () => {
     const imps = [
-      {
+      makeImp({
         name: "alice",
         agentName: "sentinel",
         status: "completed",
         turns: 3,
-        tokens: 500,
-      },
-      {
+        tokens: { input: 250, output: 250 },
+      }),
+      makeImp({
         name: "bob",
-        agentName: "ephemeral",
         status: "running",
         turns: 1,
-        tokens: 100,
-      },
+        tokens: { input: 50, output: 50 },
+      }),
     ];
-    const s = formatWaitResultCompact(imps, "all");
-    expect(s).not.toContain("All completed");
+    const s = formatWaitDisplay(imps, "all", theme);
+    expect(s).toContain("alice");
+    expect(s).toContain("bob");
+    expect(s).not.toContain("finished first");
   });
 
   it("first mode shows winner one-liner with stats", () => {
     const imps = [
-      {
+      makeImp({
         name: "kevin",
         agentName: "cartographer",
         status: "completed",
         turns: 2,
-        tokens: 8300,
-      },
+        tokens: { input: 4000, output: 4300 },
+      }),
     ];
-    const s = formatWaitResultCompact(imps, "first");
+    const s = formatWaitDisplay(imps, "first", theme);
     expect(s).toContain("kevin");
     expect(s).toContain("cartographer");
     expect(s).toContain("finished first");
-    expect(s).toContain("2 turns");
-    expect(s).toContain("8.3k tokens");
+    expect(s).toContain("2⟳");
+    expect(s).toContain("4.0k↓");
+    expect(s).toContain("4.3k↑");
   });
 
   it("first mode with ephemeral omits agent name", () => {
     const imps = [
-      {
+      makeImp({
         name: "bob",
-        agentName: "ephemeral",
         status: "completed",
         turns: 1,
-        tokens: 500,
-      },
+        tokens: { input: 250, output: 250 },
+      }),
     ];
-    const s = formatWaitResultCompact(imps, "first");
+    const s = formatWaitDisplay(imps, "first", theme);
     expect(s).toContain("bob");
     expect(s).toContain("finished first");
     expect(s).not.toContain("ephemeral");

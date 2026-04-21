@@ -7,17 +7,23 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import {
-  formatDismissResult,
-  formatImpStatus,
-  formatSummonDisplay,
-  formatSummonResult,
-  formatWaitResult,
-  formatWaitResultCompact,
-} from "./format.js";
+import { formatImpStatusDisplay, formatSummonDisplay, formatWaitDisplay } from "./display.js";
 import { spawnImpSession } from "./session.js";
 import { allImps, findImp, uncollectedImps } from "./state.js";
 import type { AgentConfig, Imp, ImpSettings } from "./types.js";
+
+// ─── LLM result formatting (JSON) ────────────────────────────────────────────
+
+function impToJson(imp: Imp): Record<string, unknown> {
+  const obj: Record<string, unknown> = {
+    name: imp.name,
+    status: imp.status,
+  };
+  if (imp.agentName !== "ephemeral") obj.agent = imp.agentName;
+  if (imp.status === "failed" && imp.error) obj.error = imp.error;
+  if (imp.output) obj.output = imp.output;
+  return obj;
+}
 
 // ─── summon ────────────────────────────────────────────────────────────────
 
@@ -164,7 +170,15 @@ export function summonTool(
         });
 
       return {
-        content: [{ type: "text", text: formatSummonResult(name, agentName) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              name,
+              ...(agentName !== "ephemeral" && { agent: agentName }),
+            }),
+          },
+        ],
         details: { name, agentName },
       };
     },
@@ -197,17 +211,12 @@ const WaitParams = Type.Object({
 });
 
 interface WaitDetails {
-  imps: Array<{
-    name: string;
-    agentName: string;
-    status: string;
-    activity?: string;
-    turns: number;
-    tokens: number;
-  }>;
+  imps: Imp[];
 }
 
-export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitParams, WaitDetails> {
+export function waitTool(
+  imps: Map<string, Imp>,
+): ToolDefinition<typeof WaitParams, WaitDetails, { animationFrame: number }> {
   return {
     name: "wait",
     label: "Wait for Imps",
@@ -241,17 +250,14 @@ export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitPara
       // Stream progress via onUpdate at intervals
       const emitUpdate = () => {
         if (!onUpdate) return;
-        const impDetails = waiting.map((imp) => ({
-          name: imp.name,
-          agentName: imp.agentName,
-          status: imp.status,
-          activity: imp.activity,
-          turns: imp.turns,
-          tokens: imp.tokens.input + imp.tokens.output,
-        }));
         onUpdate({
-          content: [{ type: "text", text: waiting.map(formatImpStatus).join("\n") }],
-          details: { imps: impDetails },
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(waiting.map(impToJson)),
+            },
+          ],
+          details: { imps: waiting },
         });
       };
 
@@ -281,17 +287,13 @@ export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitPara
         emitUpdate();
 
         return {
-          content: [{ type: "text", text: formatWaitResult(resolved) }],
-          details: {
-            imps: resolved.map((imp) => ({
-              name: imp.name,
-              agentName: imp.agentName,
-              status: imp.status,
-              activity: imp.activity,
-              turns: imp.turns,
-              tokens: imp.tokens.input + imp.tokens.output,
-            })),
-          },
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(resolved.map(impToJson)),
+            },
+          ],
+          details: { imps: resolved },
         };
       } finally {
         clearInterval(interval);
@@ -305,7 +307,8 @@ export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitPara
     },
     renderResult(result, _options, theme: Theme, context) {
       const mode = context.args?.mode ?? "all";
-      const compact = formatWaitResultCompact(result.details?.imps ?? [], mode, theme);
+      context.state.animationFrame = (context.state.animationFrame ?? 0) + 1;
+      const compact = formatWaitDisplay(result.details?.imps ?? [], mode, theme, context.state.animationFrame);
       const text = (context.lastComponent as Text) ?? new Text("", 0, 0);
       text.setText(compact);
       return text;
@@ -365,7 +368,14 @@ export function dismissTool(
       }
 
       return {
-        content: [{ type: "text", text: formatDismissResult(dismissed) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              dismissed: dismissed.map((i) => i.name),
+            }),
+          },
+        ],
         details: { names: dismissed.map((i) => i.name) },
       };
     },
@@ -398,7 +408,7 @@ function dismissImp(imp: Imp, namePool: { release(name: string): void }): void {
 
 const ListImpsParams = Type.Object({});
 
-export function listImpsTool(imps: Map<string, Imp>): ToolDefinition<typeof ListImpsParams> {
+export function listImpsTool(imps: Map<string, Imp>): ToolDefinition<typeof ListImpsParams, Imp[]> {
   return {
     name: "list_imps",
     label: "List Imps",
@@ -411,20 +421,23 @@ export function listImpsTool(imps: Map<string, Imp>): ToolDefinition<typeof List
       _signal: AbortSignal | undefined,
       _onUpdate: AgentToolUpdateCallback | undefined,
       _ctx: ExtensionContext,
-    ): Promise<AgentToolResult<unknown>> {
+    ): Promise<AgentToolResult<Imp[]>> {
       const all = allImps(imps);
-      if (all.length === 0) {
-        return {
-          content: [{ type: "text", text: "No imps." }],
-          details: undefined,
-        };
-      }
-
-      const text = all.map(formatImpStatus).join("\n");
+      const text = JSON.stringify(all.map(impToJson));
       return {
         content: [{ type: "text", text }],
-        details: undefined,
+        details: all,
       };
+    },
+    renderResult(result, _options, theme: Theme, context) {
+      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      const details = result.details ?? [];
+      if (details.length === 0) {
+        text.setText(theme.fg("dim", "No imps."));
+      } else {
+        text.setText(details.map((imp) => formatImpStatusDisplay(imp, theme, imp.name.charCodeAt(0))).join("\n"));
+      }
+      return text;
     },
   };
 }
