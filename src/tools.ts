@@ -189,6 +189,11 @@ const WaitParams = Type.Object({
   mode: Type.Union([Type.Literal("all"), Type.Literal("first")], {
     description: "all: wait for every imp, first: return when any completes",
   }),
+  names: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Wait for specific imps only (default: all uncollected)",
+    }),
+  ),
 });
 
 interface WaitDetails {
@@ -215,12 +220,16 @@ export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitPara
     parameters: WaitParams,
     async execute(
       _toolCallId: string,
-      params: { mode: "all" | "first" },
+      params: { mode: "all" | "first"; names?: string[] },
       _signal: AbortSignal | undefined,
       onUpdate: AgentToolUpdateCallback<WaitDetails> | undefined,
       _ctx: ExtensionContext,
     ): Promise<AgentToolResult<WaitDetails>> {
-      const waiting = uncollectedImps(imps);
+      let waiting = uncollectedImps(imps);
+      if (params.names) {
+        const nameSet = new Set(params.names);
+        waiting = waiting.filter((imp) => nameSet.has(imp.name));
+      }
 
       if (waiting.length === 0) {
         return {

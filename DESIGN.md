@@ -40,13 +40,14 @@ Block until imps complete. Streams live progress into the tool call UI via `Agen
 ```
 wait({
   mode: "all" | "first",  // all: wait for every imp, first: return when any completes
+  names?: string[],        // optional: wait for specific imps only (default: all uncollected)
 }) → result(s)
 ```
 
 `all` = Promise.all — wait for everything, return all results.
 `first` = Promise.race — return the first imp to complete, others keep running.
 
-`wait` targets all uncollected imps in the current session. Once returned by `wait`, an imp is "collected" and skipped by subsequent `wait` calls.
+When `names` is provided, `wait` targets only those imps. When omitted, it targets all uncollected imps in the current session. Collected imps are removed from the session — subsequent `wait` calls skip them.
 
 `wait` is chainable. After `wait({ mode: "first" })` returns one result, call `wait` again to collect the rest.
 
