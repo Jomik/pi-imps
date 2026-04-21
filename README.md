@@ -4,41 +4,32 @@ Lightweight subagent orchestration for [pi](https://github.com/mariozechner/pi-c
 
 ## Why
 
-You're working in pi and need to run multiple tasks in parallel — review code while building, research while implementing, test from several angles at once. pi-imps gives the LLM three tools (`summon`, `wait`, `dismiss`) and gets out of the way. No dashboards, no delegation nag systems, no config ceremony.
+You're working in pi and need to run multiple tasks in parallel — review code while building, research while implementing, test from several angles at once. pi-imps gives the LLM four tools (`summon`, `wait`, `dismiss`, `list_imps`) and gets out of the way. No dashboards, no delegation nag systems, no config ceremony.
 
 ## How it works
 
 The LLM summons **imps** — isolated background agent sessions that run tasks independently. Each imp gets a generated name, works silently, and reports back when collected.
 
-```
-┌ summon({ task: "research auth best practices for Node.js APIs", agent: "explorer" })
-└ Summoned kevin (explorer)
+<!-- TODO: add a GIF showing summon → wait → result flow -->
 
-┌ summon({ task: "review src/auth.ts for security issues", agent: "researcher" })
-└ Summoned stuart (researcher)
-
-┌ wait({ mode: "all" })
-│ kevin (explorer):    ✓ 3 turns, 12.4k tokens
-│ stuart (researcher): → read src/auth.ts
-```
-
-Lines update in real time as imps work. When all finish, the LLM gets their full output and decides what to do next.
+The LLM calls `summon` to launch imps, `wait` to collect results, and the output streams live in the tool call UI.
 
 ### Tools
 
 | Tool | What it does |
 |------|-------------|
 | `summon` | Launch a background imp. Returns immediately with a name. |
-| `wait` | Block until imps finish. `mode: "all"` waits for everything; `mode: "first"` returns the first to complete. |
+| `wait` | Block until imps finish. `mode: "all"` waits for everything; `mode: "first"` returns the first to complete. Optional `names` array to target specific imps. |
 | `dismiss` | Kill running imps by name or `"all"`. |
 | `list_imps` | Check status without blocking. |
 
 ### Agents
 
-Imps can use **named agents** — markdown files with a system prompt and optional configuration in YAML frontmatter. Place them in `~/.pi/agent/agents/` (global) or `.pi/agents/` (project-local).
+Imps can use **named agents** — markdown files with a system prompt and optional configuration in YAML frontmatter. Place them in `~/.pi/agent/agents/` (global) or `.pi/agents/` (project-local). Project-local agents override same-named global agents.
 
 ```markdown
 ---
+name: reviewer
 description: Security review specialist
 model: claude-sonnet-4.6
 tools: read, bash, grep
@@ -46,7 +37,14 @@ tools: read, bash, grep
 You are a security reviewer. Focus on authentication, authorization, and input validation...
 ```
 
-The `tools` field restricts which tools the agent can use. Omit it to allow all tools.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `description` | yes | Shown to the LLM in the available agents list |
+| `name` | no | Override the filename-derived agent name |
+| `model` | no | Model to use. Omit to inherit the parent session's model |
+| `tools` | no | Restrict which tools the agent can use. Omit to allow all tools |
+
+Ephemeral imps (summoned without an `agent` name) inherit the parent session's model.
 
 ### Tool allowlist
 
@@ -83,11 +81,21 @@ A safety net to prevent runaway imps. Default: **30 turns**. The imp works norma
 
 The limit is a circuit breaker, not a budget. If a task needs more than 25 turns, decompose it.
 
-```json
-"pi-imps": {
-  "turnLimit": 30
-}
-```
+### Imp status
+
+Each imp has a status visible in `wait` and `list_imps` results:
+
+| Status | Meaning |
+|--------|---------|
+| `running` | Still working |
+| `completed` | Finished successfully |
+| `failed` | Errored out (error message included) |
+| `truncated` | Hit the turn limit and was cut off |
+| `dismissed` | Killed via `dismiss` |
+
+### No recursion
+
+Imps are leaf workers. They cannot summon sub-imps — pi-imps is not loaded on imp sessions. Only the parent session orchestrates.
 
 ## Settings reference
 
