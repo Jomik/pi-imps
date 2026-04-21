@@ -28,13 +28,13 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
     }
 
     const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
-    if (!frontmatter.description) continue;
+    if (typeof frontmatter.description !== "string") continue;
 
     const name = typeof frontmatter.name === "string" ? frontmatter.name : entry.name.replace(/\.md$/, "");
 
     agents.push({
       name,
-      description: frontmatter.description as string,
+      description: frontmatter.description,
       model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
       tools: parseToolsList(frontmatter.tools),
       systemPrompt: body.trim(),

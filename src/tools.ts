@@ -15,14 +15,13 @@ import type { AgentConfig, Imp, ImpSettings } from "./types.js";
 // ─── LLM result formatting (JSON) ────────────────────────────────────────────
 
 function impToJson(imp: Imp): Record<string, unknown> {
-  const obj: Record<string, unknown> = {
+  return {
     name: imp.name,
     status: imp.status,
+    agent: imp.agent,
+    error: imp.error,
+    output: imp.output,
   };
-  if (imp.agentName !== "ephemeral") obj.agent = imp.agentName;
-  if (imp.status === "failed" && imp.error) obj.error = imp.error;
-  if (imp.output) obj.output = imp.output;
-  return obj;
 }
 
 // ─── summon ────────────────────────────────────────────────────────────────
@@ -34,14 +33,14 @@ const SummonParams = Type.Object({
 
 interface SummonDetails {
   name: string;
-  agentName: string;
+  agent: string | undefined;
 }
 
 export function summonTool(
   imps: Map<string, Imp>,
-  agents: () => AgentConfig[],
+  agents: AgentConfig[],
   namePool: { allocate(): string; release(name: string): void },
-  settings: () => ImpSettings,
+  settings: ImpSettings,
 ): ToolDefinition<typeof SummonParams, SummonDetails | undefined> {
   return {
     name: "summon",
@@ -62,25 +61,21 @@ export function summonTool(
 
       // Resolve agent config
       let config: AgentConfig | undefined;
-      let agentName = "ephemeral";
+      let agent: string | undefined;
       if (params.agent) {
-        config = agents().find((a) => a.name === params.agent);
+        config = agents.find((a) => a.name === params.agent);
         if (!config) {
           return {
             content: [
               {
                 type: "text",
-                text: `Unknown agent: ${params.agent}. Available: ${
-                  agents()
-                    .map((a) => a.name)
-                    .join(", ") || "none"
-                }`,
+                text: `Unknown agent: ${params.agent}. Available: ${agents.map((a) => a.name).join(", ") || "none"}`,
               },
             ],
             details: undefined,
           };
         }
-        agentName = config.name;
+        agent = config.name;
       }
 
       // Create done promise for wait coordination
@@ -93,7 +88,7 @@ export function summonTool(
 
       const imp: Imp = {
         name,
-        agentName,
+        agent,
         task: params.task,
         status: "running",
         startedAt: Date.now(),
@@ -126,7 +121,7 @@ export function summonTool(
         parentModel,
         modelRegistry: ctx.modelRegistry,
         signal: controller.signal,
-        settings: settings(),
+        settings,
         onTurnEnd: (turns) => {
           imp.turns = turns;
         },
@@ -173,20 +168,17 @@ export function summonTool(
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              name,
-              ...(agentName !== "ephemeral" && { agent: agentName }),
-            }),
+            text: JSON.stringify({ name, agent }),
           },
         ],
-        details: { name, agentName },
+        details: { name, agent },
       };
     },
     renderResult(result, _options, theme: Theme, context) {
       const details = result.details as SummonDetails | undefined;
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       if (details) {
-        text.setText(formatSummonDisplay(details.name, details.agentName, theme));
+        text.setText(formatSummonDisplay(details.name, details.agent, theme));
       } else {
         // Fallback (error cases)
         const msg = result.content[0];

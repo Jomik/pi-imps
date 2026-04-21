@@ -8,9 +8,9 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-function formatAgentSuffix(agentName: string, theme: Theme): string {
-  if (agentName === "ephemeral") return "";
-  return ` the ${theme.fg("muted", agentName)}`;
+function formatAgentSuffix(agent: string | undefined, theme: Theme): string {
+  if (!agent) return "";
+  return ` the ${theme.fg("muted", agent)}`;
 }
 
 function formatStats(imp: Imp, theme: Theme): string {
@@ -26,7 +26,7 @@ function formatStats(imp: Imp, theme: Theme): string {
  */
 export function formatImpStatusDisplay(imp: Imp, theme: Theme, animationFrame: number): string {
   const name = theme.fg("accent", imp.name);
-  const base = `${name}${formatAgentSuffix(imp.agentName, theme)}`;
+  const base = `${name}${formatAgentSuffix(imp.agent, theme)}`;
   const stats = formatStats(imp, theme);
 
   switch (imp.status) {
@@ -51,11 +51,11 @@ export function formatImpStatusDisplay(imp: Imp, theme: Theme, animationFrame: n
 /**
  * Format summon result for TUI display (themed).
  */
-export function formatSummonDisplay(name: string, agentName: string, theme: Theme): string {
-  if (agentName === "ephemeral") {
+export function formatSummonDisplay(name: string, agent: string | undefined, theme: Theme): string {
+  if (!agent) {
     return `${theme.fg("accent", name)} has answered your summons!`;
   }
-  return theme.fg("accent", name) + " the " + theme.fg("muted", agentName) + " has answered your summons!";
+  return `${theme.fg("accent", name)} the ${theme.fg("muted", agent)} has answered your summons!`;
 }
 
 /**
@@ -70,7 +70,7 @@ export function formatWaitDisplay(imps: Imp[], mode: "all" | "first", theme: The
     const winner = imps[0];
     if (winner && winner.status !== "running") {
       const name = theme.fg("accent", winner.name);
-      const agent = formatAgentSuffix(winner.agentName, theme);
+      const agent = formatAgentSuffix(winner.agent, theme);
       return `${name}${agent} finished first ${formatStats(winner, theme)}`;
     }
   }

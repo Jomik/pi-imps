@@ -9,7 +9,7 @@ function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
     resolveDone = r;
   });
   return {
-    agentName: "ephemeral",
+    agent: undefined,
     task: "test",
     startedAt: Date.now(),
     controller: new AbortController(),
@@ -78,9 +78,8 @@ describe("formatSummonDisplay", () => {
   });
 
   it("ephemeral agent omits agent name", () => {
-    const s = formatSummonDisplay("bob", "ephemeral", theme);
+    const s = formatSummonDisplay("bob", undefined, theme);
     expect(s).toContain("bob");
-    expect(s).not.toContain("ephemeral");
     expect(s).toContain("has answered your summons!");
   });
 });
@@ -96,14 +95,14 @@ describe("formatWaitDisplay", () => {
     const imps = [
       makeImp({
         name: "alice",
-        agentName: "sentinel",
+        agent: "sentinel",
         status: "completed",
         turns: 3,
         tokens: { input: 6200, output: 6200 },
       }),
       makeImp({
         name: "bob",
-        agentName: "mason",
+        agent: "mason",
         status: "completed",
         turns: 5,
         tokens: { input: 9000, output: 9100 },
@@ -118,7 +117,7 @@ describe("formatWaitDisplay", () => {
     const imps = [
       makeImp({
         name: "alice",
-        agentName: "sentinel",
+        agent: "sentinel",
         status: "completed",
         turns: 3,
         tokens: { input: 250, output: 250 },
@@ -140,7 +139,7 @@ describe("formatWaitDisplay", () => {
     const imps = [
       makeImp({
         name: "kevin",
-        agentName: "cartographer",
+        agent: "cartographer",
         status: "completed",
         turns: 2,
         tokens: { input: 4000, output: 4300 },
@@ -167,6 +166,5 @@ describe("formatWaitDisplay", () => {
     const s = formatWaitDisplay(imps, "first", theme);
     expect(s).toContain("bob");
     expect(s).toContain("finished first");
-    expect(s).not.toContain("ephemeral");
   });
 });

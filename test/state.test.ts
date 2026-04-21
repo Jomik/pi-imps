@@ -8,7 +8,7 @@ function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
     resolveDone = r;
   });
   return {
-    agentName: "ephemeral",
+    agent: undefined,
     task: "test task",
     startedAt: Date.now(),
     controller: new AbortController(),

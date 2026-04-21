@@ -4,18 +4,17 @@ import { createNamePool } from "./names.js";
 import { loadImpSettings } from "./settings.js";
 import { runningImps } from "./state.js";
 import { dismissAllImps, dismissTool, listImpsTool, summonTool, waitTool } from "./tools.js";
-import type { AgentConfig, Imp, ImpSettings } from "./types.js";
+import type { AgentConfig, Imp } from "./types.js";
 
 export default function (pi: ExtensionAPI): void {
   const imps: Map<string, Imp> = new Map();
   const namePool = createNamePool();
-  let agents: AgentConfig[] = [];
-  const settings: ImpSettings = loadImpSettings();
+  const agents: AgentConfig[] = [];
 
   // ── Agent discovery ────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx) => {
-    agents = discoverAgents(ctx.cwd);
+    agents.splice(0, agents.length, ...discoverAgents(ctx.cwd));
   });
 
   // ── System prompt injection ────────────────────────────────────────────
@@ -51,14 +50,7 @@ export default function (pi: ExtensionAPI): void {
 
   // ── Tools ──────────────────────────────────────────────────────────────
 
-  pi.registerTool(
-    summonTool(
-      imps,
-      () => agents,
-      namePool,
-      () => settings,
-    ),
-  );
+  pi.registerTool(summonTool(imps, agents, namePool, loadImpSettings()));
   pi.registerTool(waitTool(imps));
   pi.registerTool(dismissTool(imps, namePool));
   pi.registerTool(listImpsTool(imps));

@@ -2,7 +2,7 @@ export type ImpStatus = "running" | "completed" | "failed" | "dismissed" | "trun
 
 export interface Imp {
   readonly name: string;
-  readonly agentName: string; // named agent or "ephemeral"
+  readonly agent: string | undefined;
   readonly task: string;
   readonly startedAt: number;
   readonly controller: AbortController;

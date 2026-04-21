@@ -11,7 +11,7 @@ function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
     resolveDone = r;
   });
   return {
-    agentName: "ephemeral",
+    agent: undefined,
     task: "test",
     startedAt: Date.now(),
     controller: new AbortController(),
@@ -42,7 +42,7 @@ describe("waitTool", () => {
   it("all mode returns JSON array of completed imps", async () => {
     const a = makeImp({
       name: "alice",
-      agentName: "sentinel",
+      agent: "sentinel",
       status: "completed",
       turns: 3,
       tokens: { input: 6000, output: 6200 },
@@ -155,7 +155,6 @@ describe("waitTool", () => {
   it("ephemeral imp omits agent field", async () => {
     const a = makeImp({
       name: "eve",
-      agentName: "ephemeral",
       status: "completed",
       output: "result",
     });
@@ -172,7 +171,7 @@ describe("waitTool", () => {
   it("truncated imp preserves status and output", async () => {
     const a = makeImp({
       name: "fay",
-      agentName: "mason",
+      agent: "mason",
       status: "truncated",
       output: "partial",
     });
@@ -193,7 +192,7 @@ describe("listImpsTool", () => {
   it("returns JSON array of all imps", async () => {
     const a = makeImp({
       name: "alice",
-      agentName: "sentinel",
+      agent: "sentinel",
       status: "completed",
       output: "ok",
     });
