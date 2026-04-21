@@ -315,10 +315,14 @@ const DismissParams = Type.Object({
   name: Type.String({ description: 'Imp name or "all"' }),
 });
 
+interface DismissDetails {
+  names: string[];
+}
+
 export function dismissTool(
   imps: Map<string, Imp>,
   namePool: { allocate(): string; release(name: string): void },
-): ToolDefinition<typeof DismissParams> {
+): ToolDefinition<typeof DismissParams, DismissDetails | undefined> {
   return {
     name: "dismiss",
     label: "Dismiss Imp",
@@ -331,7 +335,7 @@ export function dismissTool(
       _signal: AbortSignal | undefined,
       _onUpdate: AgentToolUpdateCallback | undefined,
       _ctx: ExtensionContext,
-    ): Promise<AgentToolResult<unknown>> {
+    ) {
       const dismissed: Imp[] = [];
 
       if (params.name === "all") {
@@ -362,8 +366,21 @@ export function dismissTool(
 
       return {
         content: [{ type: "text", text: formatDismissResult(dismissed) }],
-        details: undefined,
+        details: { names: dismissed.map((i) => i.name) },
       };
+    },
+    renderResult(result, _options, theme: Theme, context) {
+      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      const details = result.details as DismissDetails | undefined;
+      if (details && details.names.length > 0) {
+        text.setText(
+          theme.fg("dim", "Dismissed ") + details.names.map((n) => theme.fg("accent", n)).join(theme.fg("dim", ", ")),
+        );
+      } else {
+        const msg = result.content[0];
+        text.setText(theme.fg("dim", msg?.type === "text" ? msg.text : ""));
+      }
+      return text;
     },
   };
 }
