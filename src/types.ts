@@ -7,7 +7,6 @@ export interface Imp {
   readonly startedAt: number;
   readonly controller: AbortController;
   status: ImpStatus;
-  collected: boolean;
   completedAt?: number;
   turns: number;
   tokens: { input: number; output: number };

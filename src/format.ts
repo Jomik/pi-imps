@@ -78,7 +78,7 @@ export function formatSummonResult(name: string, agentName: string): string {
  */
 export function formatSummonDisplay(name: string, agentName: string, theme: Theme): string {
   if (agentName === "ephemeral") {
-    return theme.fg("accent", name) + " has answered your summons!";
+    return `${theme.fg("accent", name)} has answered your summons!`;
   }
   return theme.fg("accent", name) + " the " + theme.fg("muted", agentName) + " has answered your summons!";
 }
@@ -123,7 +123,7 @@ interface CompactImp {
 function formatCompactStatus(imp: CompactImp, theme?: Theme): string {
   const name = theme ? theme.fg("accent", imp.name) : imp.name;
   const agent =
-    imp.agentName === "ephemeral" ? "" : theme ? " the " + theme.fg("muted", imp.agentName) : ` (${imp.agentName})`;
+    imp.agentName === "ephemeral" ? "" : theme ? ` the ${theme.fg("muted", imp.agentName)}` : ` (${imp.agentName})`;
   const base = `${name}${agent}`;
   const tokens = formatTokens(imp.tokens);
   const dim = (s: string) => (theme ? theme.fg("dim", s) : s);
@@ -162,11 +162,11 @@ export function formatWaitResultCompact(imps: CompactImp[], mode: "all" | "first
         winner.agentName === "ephemeral"
           ? ""
           : theme
-            ? " the " + theme.fg("muted", winner.agentName)
+            ? ` the ${theme.fg("muted", winner.agentName)}`
             : ` (${winner.agentName})`;
       const tokens = formatTokens(winner.tokens);
       const stats = `${winner.turns} turns, ${tokens} tokens`;
-      const line = `${name}${agent} finished first ${theme ? theme.fg("dim", "\u2014 " + stats) : "\u2014 " + stats}`;
+      const line = `${name}${agent} finished first ${theme ? theme.fg("dim", `\u2014 ${stats}`) : `\u2014 ${stats}`}`;
       return line;
     }
     // Race still running — show all imp statuses

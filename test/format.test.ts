@@ -21,7 +21,6 @@ function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
     startedAt: Date.now(),
     controller: new AbortController(),
     status: "running",
-    collected: false,
     turns: 0,
     tokens: { input: 0, output: 0 },
     done,

@@ -43,10 +43,7 @@ export function summonTool(
     description:
       "Summon an imp to work on a task in the background. Returns immediately with a name. Use wait to collect results.",
     promptSnippet: "Summon an imp for background task delegation",
-    promptGuidelines: [
-      "Use summon to delegate tasks to background imps. Call wait to collect results.",
-      "You can summon multiple imps (including parallel tool calls), then wait for all or first.",
-    ],
+    promptGuidelines: ["You can summon multiple imps (including parallel tool calls), then wait for all or first."],
     parameters: SummonParams,
     async execute(
       _toolCallId: string,
@@ -93,7 +90,6 @@ export function summonTool(
         agentName,
         task: params.task,
         status: "running",
-        collected: false,
         startedAt: Date.now(),
         turns: 0,
         tokens: { input: 0, output: 0 },
@@ -213,9 +209,8 @@ export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitPara
     description:
       "Block until imps complete. Streams live progress. mode=all waits for every uncollected imp, mode=first returns when any one completes.",
     promptGuidelines: [
-      "wait targets all uncollected imps. Once returned by wait, an imp is 'collected' and skipped by subsequent wait calls.",
-      "wait({ mode: 'first' }) returns the first imp to complete; others keep running. Call wait again to collect the rest, or dismiss to kill them.",
-      "Imp failures are returned as results with failed status, not thrown exceptions.",
+      "Collected imps are removed from the session. Failures are returned as results, not exceptions.",
+      "wait({ mode: 'first' }) returns the first to complete; others keep running. Call wait again or dismiss.",
     ],
     parameters: WaitParams,
     async execute(
@@ -268,9 +263,9 @@ export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitPara
           resolved = winner && winner.status !== "dismissed" ? [winner] : [];
         }
 
-        // Mark collected
+        // Remove collected imps from map
         for (const imp of resolved) {
-          imp.collected = true;
+          imps.delete(imp.name);
         }
 
         // Final update
@@ -296,7 +291,7 @@ export function waitTool(imps: Map<string, Imp>): ToolDefinition<typeof WaitPara
     renderCall(args, theme: Theme, context) {
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       const mode = args.mode === "first" ? "race" : "all";
-      text.setText(theme.fg("toolTitle", theme.bold("wait")) + " " + theme.fg("dim", mode));
+      text.setText(`${theme.fg("toolTitle", theme.bold("wait"))} ${theme.fg("dim", mode)}`);
       return text;
     },
     renderResult(result, _options, theme: Theme, context) {
@@ -326,8 +321,7 @@ export function dismissTool(
   return {
     name: "dismiss",
     label: "Dismiss Imp",
-    description: 'Abort running imp(s). Pass an imp name or "all".',
-    promptGuidelines: ["Use dismiss after wait({ mode: 'first' }) to kill remaining imps you no longer need."],
+    description: 'Dismiss imp(s) and remove from session. Pass an imp name or "all".',
     parameters: DismissParams,
     async execute(
       _toolCallId: string,
@@ -342,9 +336,10 @@ export function dismissTool(
         for (const imp of imps.values()) {
           if (imp.status === "running") {
             dismissImp(imp, namePool);
-            dismissed.push(imp);
           }
+          dismissed.push(imp);
         }
+        imps.clear();
       } else {
         const imp = findImp(imps, params.name);
         if (!imp) {
@@ -355,13 +350,9 @@ export function dismissTool(
         }
         if (imp.status === "running") {
           dismissImp(imp, namePool);
-          dismissed.push(imp);
-        } else {
-          return {
-            content: [{ type: "text", text: `${imp.name} is already ${imp.status}` }],
-            details: undefined,
-          };
         }
+        imps.delete(imp.name);
+        dismissed.push(imp);
       }
 
       return {
@@ -403,9 +394,7 @@ export function listImpsTool(imps: Map<string, Imp>): ToolDefinition<typeof List
     name: "list_imps",
     label: "List Imps",
     description: "List running and recently completed imps with status and basic stats.",
-    promptGuidelines: [
-      "Use list_imps to check imp status without blocking. Results from list_imps are not injected into context — use wait to collect full output.",
-    ],
+    promptGuidelines: ["Shows status only, not imp output. Use wait to collect full results."],
     parameters: ListImpsParams,
     async execute(
       _toolCallId: string,

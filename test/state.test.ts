@@ -13,7 +13,6 @@ function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
     startedAt: Date.now(),
     controller: new AbortController(),
     status: "running",
-    collected: false,
     turns: 0,
     tokens: { input: 0, output: 0 },
     done,
@@ -45,13 +44,12 @@ describe("findImp", () => {
 });
 
 describe("uncollectedImps", () => {
-  it("excludes collected and dismissed", () => {
-    const a = makeImp({ name: "a", status: "completed", collected: false });
-    const b = makeImp({ name: "b", status: "completed", collected: true });
-    const c = makeImp({ name: "c", status: "dismissed", collected: false });
-    const d = makeImp({ name: "d", status: "running", collected: false });
-    const result = uncollectedImps(buildMap(a, b, c, d));
-    expect(result).toEqual([a, d]);
+  it("excludes dismissed", () => {
+    const a = makeImp({ name: "a", status: "completed" });
+    const b = makeImp({ name: "b", status: "dismissed" });
+    const c = makeImp({ name: "c", status: "running" });
+    const result = uncollectedImps(buildMap(a, b, c));
+    expect(result).toEqual([a, c]);
   });
 });
 
@@ -68,7 +66,7 @@ describe("runningImps", () => {
 describe("allImps", () => {
   it("returns everything", () => {
     const a = makeImp({ name: "a", status: "running" });
-    const b = makeImp({ name: "b", status: "completed", collected: true });
+    const b = makeImp({ name: "b", status: "completed" });
     const c = makeImp({ name: "c", status: "dismissed" });
     const map = buildMap(a, b, c);
     expect(allImps(map)).toEqual([a, b, c]);
