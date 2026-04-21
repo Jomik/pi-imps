@@ -2,6 +2,7 @@ import type {
   AgentToolResult,
   AgentToolUpdateCallback,
   ExtensionContext,
+  Theme,
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
@@ -9,6 +10,7 @@ import { Type } from "@sinclair/typebox";
 import {
   formatDismissResult,
   formatImpStatus,
+  formatSummonDisplay,
   formatSummonResult,
   formatWaitResult,
   formatWaitResultCompact,
@@ -24,12 +26,17 @@ const SummonParams = Type.Object({
   agent: Type.Optional(Type.String({ description: "Named agent to use, or omit for ephemeral" })),
 });
 
+interface SummonDetails {
+  name: string;
+  agentName: string;
+}
+
 export function summonTool(
   imps: Map<string, Imp>,
   agents: () => AgentConfig[],
   namePool: { allocate(): string; release(name: string): void },
   settings: () => ImpSettings,
-): ToolDefinition<typeof SummonParams> {
+): ToolDefinition<typeof SummonParams, SummonDetails | undefined> {
   return {
     name: "summon",
     label: "Summon Imp",
@@ -47,7 +54,7 @@ export function summonTool(
       _signal: AbortSignal | undefined,
       _onUpdate: AgentToolUpdateCallback | undefined,
       ctx: ExtensionContext,
-    ): Promise<AgentToolResult<unknown>> {
+    ) {
       const name = namePool.allocate();
 
       // Resolve agent config
@@ -162,8 +169,20 @@ export function summonTool(
 
       return {
         content: [{ type: "text", text: formatSummonResult(name, agentName) }],
-        details: undefined,
+        details: { name, agentName },
       };
+    },
+    renderResult(result, _options, theme: Theme, context) {
+      const details = result.details as SummonDetails | undefined;
+      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      if (details) {
+        text.setText(formatSummonDisplay(details.name, details.agentName, theme));
+      } else {
+        // Fallback (error cases)
+        const msg = result.content[0];
+        text.setText(msg?.type === "text" ? msg.text : "");
+      }
+      return text;
     },
   };
 }

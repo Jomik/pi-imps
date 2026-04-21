@@ -3,6 +3,7 @@ import {
   buildAgentsBlock,
   formatDismissResult,
   formatImpStatus,
+  formatSummonDisplay,
   formatSummonResult,
   formatWaitResult,
   formatWaitResultCompact,
@@ -154,6 +155,30 @@ describe("formatSummonResult", () => {
     const s = formatSummonResult("alice", "coder");
     expect(s).toContain("alice");
     expect(s).toContain("coder");
+  });
+});
+
+// --- formatSummonDisplay ---
+
+describe("formatSummonDisplay", () => {
+  // Minimal theme stub that wraps text in markers for assertion
+  const theme = {
+    fg: (_color: string, text: string) => `[${_color}:${text}]`,
+  } as any;
+
+  it("named agent uses 'the' phrasing", () => {
+    const s = formatSummonDisplay("alice", "coder", theme);
+    expect(s).toContain("alice");
+    expect(s).toContain("coder");
+    expect(s).toContain("the");
+    expect(s).toContain("has answered your summons!");
+  });
+
+  it("ephemeral agent omits agent name", () => {
+    const s = formatSummonDisplay("bob", "ephemeral", theme);
+    expect(s).toContain("bob");
+    expect(s).not.toContain("ephemeral");
+    expect(s).toContain("has answered your summons!");
   });
 });
 

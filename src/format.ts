@@ -1,3 +1,4 @@
+import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig, Imp, ImpStatus } from "./types.js";
 
 /**
@@ -70,6 +71,16 @@ export function formatWaitResult(imps: Imp[]): string {
 export function formatSummonResult(name: string, agentName: string): string {
   const agent = agentName === "ephemeral" ? "ephemeral" : agentName;
   return `Summoned ${name} (${agent})`;
+}
+
+/**
+ * Format summon result for TUI display (themed).
+ */
+export function formatSummonDisplay(name: string, agentName: string, theme: Theme): string {
+  if (agentName === "ephemeral") {
+    return theme.fg("accent", name) + " has answered your summons!";
+  }
+  return theme.fg("accent", name) + " the " + theme.fg("muted", agentName) + " has answered your summons!";
 }
 
 /**
