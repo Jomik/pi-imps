@@ -1,18 +1,23 @@
 export type ImpStatus = "running" | "completed" | "failed" | "dismissed" | "truncated";
 
-export interface Imp {
+/** Serializable subset of Imp — safe for details/display, no runtime handles. */
+export interface ImpSnapshot {
   readonly name: string;
   readonly agent: string | undefined;
-  readonly task: string;
-  readonly startedAt: number;
-  readonly controller: AbortController;
   status: ImpStatus;
-  completedAt?: number;
   turns: number;
   tokens: { input: number; output: number };
   output?: string;
   error?: string;
   activity?: string; // live: "→ bash npm test"
+}
+
+/** Full runtime imp — extends snapshot with non-serializable handles. */
+export interface Imp extends ImpSnapshot {
+  readonly task: string;
+  readonly startedAt: number;
+  readonly controller: AbortController;
+  completedAt?: number;
   session?: { abort(): Promise<void> }; // set once session is spawned
   /** Resolves when the imp finishes (completed/failed). Never rejects. */
   readonly done: Promise<void>;

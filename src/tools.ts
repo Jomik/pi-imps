@@ -10,7 +10,7 @@ import { Type } from "@sinclair/typebox";
 import { formatImpStatusDisplay, formatSummonDisplay, formatWaitDisplay } from "./display.js";
 import { spawnImpSession } from "./session.js";
 import { allImps, findImp, uncollectedImps } from "./state.js";
-import type { AgentConfig, Imp, ImpSettings } from "./types.js";
+import type { AgentConfig, Imp, ImpSettings, ImpSnapshot } from "./types.js";
 
 // ─── LLM result formatting (JSON) ────────────────────────────────────────────
 
@@ -23,6 +23,22 @@ function impToJson(imp: Imp): Record<string, unknown> {
     output: imp.output,
   };
 }
+
+// ─── Serialization ───────────────────────────────────────────────────────────
+
+function impToSnapshot(imp: Imp): ImpSnapshot {
+  return {
+    name: imp.name,
+    agent: imp.agent,
+    status: imp.status,
+    turns: imp.turns,
+    tokens: { ...imp.tokens },
+    output: imp.output,
+    error: imp.error,
+    activity: imp.activity,
+  };
+}
+
 
 // ─── summon ────────────────────────────────────────────────────────────────
 
@@ -203,7 +219,7 @@ const WaitParams = Type.Object({
 });
 
 interface WaitDetails {
-  imps: Imp[];
+  imps: ImpSnapshot[];
 }
 
 export function waitTool(
@@ -222,7 +238,7 @@ export function waitTool(
     async execute(
       _toolCallId: string,
       params: { mode: "all" | "first"; names?: string[] },
-      _signal: AbortSignal | undefined,
+      signal: AbortSignal | undefined,
       onUpdate: AgentToolUpdateCallback<WaitDetails> | undefined,
       _ctx: ExtensionContext,
     ): Promise<AgentToolResult<WaitDetails>> {
@@ -239,6 +255,18 @@ export function waitTool(
         };
       }
 
+      // Abort-aware awaiting: race imp completion against the tool call's abort signal
+      // so pi can shut down / cancel without deadlocking on a blocked wait.
+      const aborted = signal
+        ? new Promise<void>((resolve) => {
+            if (signal.aborted) {
+              resolve();
+              return;
+            }
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          })
+        : null;
+
       // Stream progress via onUpdate at intervals
       const emitUpdate = () => {
         if (!onUpdate) return;
@@ -249,7 +277,7 @@ export function waitTool(
               text: JSON.stringify(waiting.map(impToJson)),
             },
           ],
-          details: { imps: waiting },
+          details: { imps: waiting.map(impToSnapshot) },
         });
       };
 
@@ -262,15 +290,19 @@ export function waitTool(
         let resolved: Imp[];
 
         if (params.mode === "all") {
-          await Promise.all(waiting.map((imp) => imp.done));
-          resolved = waiting.filter((imp) => imp.status !== "dismissed");
+          const done = Promise.all(waiting.map((imp) => imp.done));
+          await (aborted ? Promise.race([done, aborted]) : done);
+          resolved = waiting.filter((imp) => imp.status !== "dismissed" && imp.status !== "running");
         } else {
           // Race: resolve with the actual winner, not insertion order
-          const winner = await Promise.race(waiting.map((imp) => imp.done.then(() => imp)));
+          const racePromises = waiting.map((imp) => imp.done.then(() => imp as Imp | undefined));
+          const winner = await Promise.race(
+            aborted ? [...racePromises, aborted.then(() => undefined as Imp | undefined)] : racePromises,
+          );
           resolved = winner && winner.status !== "dismissed" ? [winner] : [];
         }
 
-        // Remove collected imps from map
+        // Remove collected imps from map (running imps stay for future wait calls)
         for (const imp of resolved) {
           imps.delete(imp.name);
         }
@@ -285,7 +317,7 @@ export function waitTool(
               text: JSON.stringify(resolved.map(impToJson)),
             },
           ],
-          details: { imps: resolved },
+          details: { imps: resolved.map(impToSnapshot) },
         };
       } finally {
         clearInterval(interval);
@@ -400,7 +432,7 @@ function dismissImp(imp: Imp, namePool: { release(name: string): void }): void {
 
 const ListImpsParams = Type.Object({});
 
-export function listImpsTool(imps: Map<string, Imp>): ToolDefinition<typeof ListImpsParams, Imp[]> {
+export function listImpsTool(imps: Map<string, Imp>): ToolDefinition<typeof ListImpsParams, ImpSnapshot[]> {
   return {
     name: "list_imps",
     label: "List Imps",
@@ -413,12 +445,12 @@ export function listImpsTool(imps: Map<string, Imp>): ToolDefinition<typeof List
       _signal: AbortSignal | undefined,
       _onUpdate: AgentToolUpdateCallback | undefined,
       _ctx: ExtensionContext,
-    ): Promise<AgentToolResult<Imp[]>> {
+    ): Promise<AgentToolResult<ImpSnapshot[]>> {
       const all = allImps(imps);
       const text = JSON.stringify(all.map(impToJson));
       return {
         content: [{ type: "text", text }],
-        details: all,
+        details: all.map(impToSnapshot),
       };
     },
     renderResult(result, _options, theme: Theme, context) {

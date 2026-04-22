@@ -1,5 +1,5 @@
 import type { Theme } from "@mariozechner/pi-coding-agent";
-import type { Imp } from "./types.js";
+import type { ImpSnapshot } from "./types.js";
 
 const SPINNER = "·•✧✦✧•";
 
@@ -13,7 +13,7 @@ function formatAgentSuffix(agent: string | undefined, theme: Theme): string {
   return ` the ${theme.fg("muted", agent)}`;
 }
 
-function formatStats(imp: Imp, theme: Theme): string {
+function formatStats(imp: ImpSnapshot, theme: Theme): string {
   const i = formatTokens(imp.tokens.input);
   const o = formatTokens(imp.tokens.output);
   return theme.fg("dim", `(${imp.turns}⟳ ${i}↓ ${o}↑)`);
@@ -24,7 +24,7 @@ function formatStats(imp: Imp, theme: Theme): string {
  *
  * Shows terse "✗ failed" for failures — full output is shown elsewhere in the TUI.
  */
-export function formatImpStatusDisplay(imp: Imp, theme: Theme, animationFrame: number): string {
+export function formatImpStatusDisplay(imp: ImpSnapshot, theme: Theme, animationFrame: number): string {
   const name = theme.fg("accent", imp.name);
   const base = `${name}${formatAgentSuffix(imp.agent, theme)}`;
   const stats = formatStats(imp, theme);
@@ -61,7 +61,7 @@ export function formatSummonDisplay(name: string, agent: string | undefined, the
 /**
  * Format compact wait result for TUI display (themed).
  */
-export function formatWaitDisplay(imps: Imp[], mode: "all" | "first", theme: Theme, animationFrame = 0): string {
+export function formatWaitDisplay(imps: ImpSnapshot[], mode: "all" | "first", theme: Theme, animationFrame = 0): string {
   if (imps.length === 0) return theme.fg("dim", "No uncollected imps.");
 
   const lines = imps.map((imp, i) => formatImpStatusDisplay(imp, theme, animationFrame + i));
