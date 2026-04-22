@@ -4,8 +4,8 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AgentSession, Extension, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import {
   createAgentSession,
-  createCodingTools,
   DefaultResourceLoader,
+  getAgentDir,
   SessionManager,
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
@@ -61,6 +61,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
 
   const loader = new DefaultResourceLoader({
     cwd,
+    agentDir: getAgentDir(),
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
@@ -82,18 +83,13 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     if (resolved) model = resolved;
   }
 
-  // Create core tools, filtered by allowlist
-  let tools = createCodingTools(cwd);
-  if (toolAllowlist) {
-    tools = tools.filter((t) => toolAllowlist.includes(t.name));
-  }
 
   const { session } = await createAgentSession({
     cwd,
     model,
-    tools,
+    tools: toolAllowlist,
     sessionManager: SessionManager.inMemory(),
-    settingsManager: SettingsManager.create(),
+    settingsManager: SettingsManager.inMemory(),
     modelRegistry,
     resourceLoader: loader,
   });

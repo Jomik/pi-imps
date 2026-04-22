@@ -1,4 +1,4 @@
-import { SettingsManager } from "@mariozechner/pi-coding-agent";
+import { getAgentDir, SettingsManager } from "@mariozechner/pi-coding-agent";
 import type { ImpSettings } from "./types.js";
 
 const DEFAULTS: ImpSettings = {
@@ -30,7 +30,7 @@ export function parseImpSettings(block: Record<string, unknown> | undefined): Im
  * Falls back to defaults for missing fields.
  */
 export function loadImpSettings(settingsManager?: SettingsManager): ImpSettings {
-  const sm = settingsManager ?? SettingsManager.create();
+  const sm = settingsManager ?? SettingsManager.create(process.cwd(), getAgentDir());
   const raw = sm.getGlobalSettings() as Record<string, unknown>;
   return parseImpSettings(raw["pi-imps"] as Record<string, unknown> | undefined);
 }
