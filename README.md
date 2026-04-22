@@ -2,6 +2,18 @@
 
 Lightweight subagent orchestration for [pi](https://github.com/mariozechner/pi-coding-agent). Summon background agents, collect their results, done.
 
+## Installation
+
+```bash
+pi install npm:pi-imps
+```
+
+Or try it without installing:
+
+```bash
+pi -e npm:pi-imps
+```
+
 ## Why
 
 You're working in pi and need to run multiple tasks in parallel — review code while building, research while implementing, test from several angles at once. pi-imps gives the LLM four tools (`summon`, `wait`, `dismiss`, `list_imps`) and gets out of the way. No dashboards, no delegation nag systems, no config ceremony.
