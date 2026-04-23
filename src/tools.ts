@@ -92,6 +92,25 @@ export function summonTool(
           };
         }
         agent = config.name;
+
+        // Verify the agent's model exists in the registry
+        if (config.model) {
+          const available = ctx.modelRegistry.getAvailable();
+          const resolved = available.find((m) => m.name === config!.model || m.id === config!.model);
+          if (!resolved) {
+            namePool.release(name);
+            const modelNames = available.map((m) => m.name).join(", ");
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Agent "${config.name}" requires model "${config.model}" which is not available. Models: ${modelNames || "none"}`,
+                },
+              ],
+              details: undefined,
+            };
+          }
+        }
       }
 
       // Create done promise for wait coordination

@@ -78,9 +78,12 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   // Resolve model: named agent's model or parent model
   let model = parentModel;
   if (config?.model) {
-    const all = modelRegistry.getAll();
-    const resolved = all.find((m) => m.name === config.model || m.id === config.model);
-    if (resolved) model = resolved;
+    const available = modelRegistry.getAvailable();
+    const resolved = available.find((m) => m.name === config.model || m.id === config.model);
+    if (!resolved) {
+      throw new Error(`Model "${config.model}" not found in registry`);
+    }
+    model = resolved;
   }
 
   const { session } = await createAgentSession({
