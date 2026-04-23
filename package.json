@@ -1,6 +1,7 @@
 {
   "name": "pi-imps",
   "version": "0.1.1",
+  "packageManager": "npm@11.12.1",
   "description": "Lightweight subagent orchestration for pi.",
   "license": "MIT",
   "author": "Jonas Damtoft",
