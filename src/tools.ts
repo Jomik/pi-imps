@@ -42,8 +42,8 @@ function impToSnapshot(imp: Imp): ImpSnapshot {
 // ─── summon ────────────────────────────────────────────────────────────────
 
 const SummonParams = Type.Object({
-  task: Type.String({ description: "What the imp should do" }),
-  agent: Type.Optional(Type.String({ description: "Named agent to use, or omit for ephemeral" })),
+  task: Type.String({ description: "What the imp should do", minLength: 10 }),
+  agent: Type.Optional(Type.String({ description: "Named agent to use, or omit for ephemeral", minLength: 1 })),
 });
 
 interface SummonDetails {
@@ -80,6 +80,7 @@ export function summonTool(
       if (params.agent) {
         config = agents.find((a) => a.name === params.agent);
         if (!config) {
+          namePool.release(name);
           return {
             content: [
               {
@@ -91,6 +92,25 @@ export function summonTool(
           };
         }
         agent = config.name;
+
+        // Verify the agent's model exists in the registry
+        if (config.model) {
+          const available = ctx.modelRegistry.getAvailable();
+          const resolved = available.find((m) => m.name === config!.model || m.id === config!.model);
+          if (!resolved) {
+            namePool.release(name);
+            const modelNames = available.map((m) => m.name).join(", ");
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Agent "${config.name}" requires model "${config.model}" which is not available. Models: ${modelNames || "none"}`,
+                },
+              ],
+              details: undefined,
+            };
+          }
+        }
       }
 
       // Create done promise for wait coordination
@@ -211,7 +231,7 @@ const WaitParams = Type.Object({
     description: "all: wait for every imp, first: return when any completes",
   }),
   names: Type.Optional(
-    Type.Array(Type.String(), {
+    Type.Array(Type.String({ minLength: 1 }), {
       description: "Wait for specific imps only (default: all uncollected)",
     }),
   ),
@@ -342,7 +362,7 @@ export function waitTool(
 // ─── dismiss ───────────────────────────────────────────────────────────────
 
 const DismissParams = Type.Object({
-  name: Type.String({ description: 'Imp name or "all"' }),
+  name: Type.String({ description: 'Imp name or "all"', minLength: 1 }),
 });
 
 interface DismissDetails {
