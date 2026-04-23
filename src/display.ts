@@ -61,7 +61,12 @@ export function formatSummonDisplay(name: string, agent: string | undefined, the
 /**
  * Format compact wait result for TUI display (themed).
  */
-export function formatWaitDisplay(imps: ImpSnapshot[], mode: "all" | "first", theme: Theme, animationFrame = 0): string {
+export function formatWaitDisplay(
+  imps: ImpSnapshot[],
+  mode: "all" | "first",
+  theme: Theme,
+  animationFrame = 0,
+): string {
   if (imps.length === 0) return theme.fg("dim", "No uncollected imps.");
 
   const lines = imps.map((imp, i) => formatImpStatusDisplay(imp, theme, animationFrame + i));

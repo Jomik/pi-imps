@@ -83,7 +83,6 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     if (resolved) model = resolved;
   }
 
-
   const { session } = await createAgentSession({
     cwd,
     model,

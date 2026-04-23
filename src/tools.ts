@@ -6,7 +6,7 @@ import type {
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { formatImpStatusDisplay, formatSummonDisplay, formatWaitDisplay } from "./display.js";
 import { spawnImpSession } from "./session.js";
 import { allImps, findImp, uncollectedImps } from "./state.js";
@@ -38,7 +38,6 @@ function impToSnapshot(imp: Imp): ImpSnapshot {
     activity: imp.activity,
   };
 }
-
 
 // ─── summon ────────────────────────────────────────────────────────────────
 

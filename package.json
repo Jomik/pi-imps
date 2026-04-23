@@ -36,13 +36,13 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": ">=0.68.0",
-    "@sinclair/typebox": ">=0.34.0"
+    "@mariozechner/pi-coding-agent": ">=0.69.0",
+    "typebox": "^1.0.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
-    "@mariozechner/pi-coding-agent": "^0.68.1",
-    "@sinclair/typebox": "^0.34.49",
+    "@mariozechner/pi-coding-agent": "^0.69.0",
+    "typebox": "^1.1.31",
     "typescript": "^5.7.3",
     "vitest": "^3.2.4"
   }
