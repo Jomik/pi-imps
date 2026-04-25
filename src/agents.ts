@@ -32,11 +32,14 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 
     const name = typeof frontmatter.name === "string" ? frontmatter.name : entry.name.replace(/\.md$/, "");
 
+    const turnLimit = parseTurnLimit(frontmatter.turns);
+
     agents.push({
       name,
       description: frontmatter.description,
       model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
       tools: parseToolsList(frontmatter.tools),
+      turnLimit,
       systemPrompt: body.trim(),
       source,
       filePath,
@@ -64,6 +67,17 @@ export function discoverAgents(cwd: string): AgentConfig[] {
   for (const a of projectAgents) byName.set(a.name, a);
 
   return Array.from(byName.values());
+}
+
+/**
+ * Parse a turn limit value from frontmatter.
+ * Returns the number if it is an integer >= 2, else undefined.
+ */
+export function parseTurnLimit(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  if (!Number.isInteger(value)) return undefined;
+  if (value < 2) return undefined;
+  return value;
 }
 
 /**

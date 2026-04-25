@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseToolsList } from "../src/agents.js";
+import { parseToolsList, parseTurnLimit } from "../src/agents.js";
 
 describe("parseToolsList", () => {
   // YAML array
@@ -59,5 +59,33 @@ describe("parseToolsList", () => {
 
   it("returns undefined for boolean", () => {
     expect(parseToolsList(true)).toBeUndefined();
+  });
+});
+
+describe("parseTurnLimit", () => {
+  it("accepts integer >= 2", () => {
+    expect(parseTurnLimit(2)).toBe(2);
+    expect(parseTurnLimit(30)).toBe(30);
+    expect(parseTurnLimit(100)).toBe(100);
+  });
+
+  it("rejects values below 2", () => {
+    expect(parseTurnLimit(1)).toBeUndefined();
+    expect(parseTurnLimit(0)).toBeUndefined();
+    expect(parseTurnLimit(-5)).toBeUndefined();
+  });
+
+  it("rejects non-integers", () => {
+    expect(parseTurnLimit(2.5)).toBeUndefined();
+    expect(parseTurnLimit(Number.NaN)).toBeUndefined();
+    expect(parseTurnLimit(Number.POSITIVE_INFINITY)).toBeUndefined();
+  });
+
+  it("rejects non-numbers", () => {
+    expect(parseTurnLimit("30")).toBeUndefined();
+    expect(parseTurnLimit(undefined)).toBeUndefined();
+    expect(parseTurnLimit(null)).toBeUndefined();
+    expect(parseTurnLimit(true)).toBeUndefined();
+    expect(parseTurnLimit([30])).toBeUndefined();
   });
 });

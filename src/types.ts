@@ -31,6 +31,7 @@ export interface AgentConfig {
   readonly description: string;
   readonly model?: string;
   readonly tools?: string[];
+  readonly turnLimit?: number;
   readonly systemPrompt: string;
   readonly source: AgentSource;
   readonly filePath: string;

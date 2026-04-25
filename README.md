@@ -55,6 +55,7 @@ You are a security reviewer. Focus on authentication, authorization, and input v
 | `name` | no | Override the filename-derived agent name |
 | `model` | no | Model to use. Omit to inherit the parent session's model |
 | `tools` | no | Restrict which tools the agent can use. Omit to allow all tools |
+| `turns` | no | Per-agent turn limit (minimum 2). Overrides the global `turnLimit` setting |
 
 Ephemeral imps (summoned without an `agent` name) inherit the parent session's model.
 
@@ -91,7 +92,7 @@ Agent frontmatter cannot override additional extensions.
 
 A safety net to prevent runaway imps. Default: **30 turns**. The imp works normally until its final turn, when it receives a directive to wrap up. After that turn, the session ends with a `truncated` status so the LLM knows the imp was cut off.
 
-The limit is a circuit breaker, not a budget. If a task needs more than 25 turns, decompose it.
+The limit is a circuit breaker, not a budget. If an imp hits it, the task was too broad or under-specified — decompose it or tighten the prompt rather than raising the limit.
 
 ### Imp status
 
