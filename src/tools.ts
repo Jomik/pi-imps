@@ -61,7 +61,7 @@ export function summonTool(
     name: "summon",
     label: "Summon Imp",
     description:
-      "Summon an imp to work on a task in the background. Returns immediately with a name. Use wait to collect results.",
+      "Summon an imp — an isolated background agent with its own session. Returns immediately with a name; use `wait` to collect results. The imp has no access to the delegator's conversation, so the `task` must be self-contained.",
     promptSnippet: "Summon an imp for background task delegation",
     promptGuidelines: ["You can summon multiple imps (including parallel tool calls), then wait for all or first."],
     parameters: SummonParams,
@@ -248,10 +248,9 @@ export function waitTool(
     name: "wait",
     label: "Wait for Imps",
     description:
-      "Block until imps complete. Streams live progress. mode=all waits for every uncollected imp, mode=first returns when any one completes.",
+      "Block until imps complete. `mode=all` waits for every uncollected imp; `mode=first` returns the first to finish. Each result includes `status` (`completed`, `failed`, `truncated`, or `dismissed`), `output`, and `error`.",
     promptGuidelines: [
-      "Collected imps are removed from the session. Failures are returned as results, not exceptions.",
-      "wait({ mode: 'first' }) returns the first to complete; others keep running. Call wait again or dismiss.",
+      "Collected imps are removed from the session. wait({ mode: 'first' }) returns the first to complete; others keep running — call wait again or dismiss.",
     ],
     parameters: WaitParams,
     async execute(
@@ -376,7 +375,8 @@ export function dismissTool(
   return {
     name: "dismiss",
     label: "Dismiss Imp",
-    description: 'Dismiss imp(s) and remove from session. Pass an imp name or "all".',
+    description:
+      'Abort running imps and remove them from the session. Pass an imp name or "all". Completed imps are also removed.',
     parameters: DismissParams,
     async execute(
       _toolCallId: string,
