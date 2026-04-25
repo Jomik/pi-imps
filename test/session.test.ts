@@ -1,6 +1,6 @@
 import type { Extension } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { resolveToolAllowlist, shouldIncludeExtension } from "../src/session.js";
+import { resolveToolAllowlist, resolveTurnLimit, shouldIncludeExtension } from "../src/session.js";
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -52,6 +52,22 @@ describe("resolveToolAllowlist", () => {
 
   it("settings empty array means no tools", () => {
     expect(resolveToolAllowlist(undefined, [])).toEqual([]);
+  });
+});
+
+// ─── resolveTurnLimit ──────────────────────────────────────────────────────
+
+describe("resolveTurnLimit", () => {
+  it("agent limit overrides settings", () => {
+    expect(resolveTurnLimit(50, 30)).toBe(50);
+  });
+
+  it("falls back to settings when agent limit absent", () => {
+    expect(resolveTurnLimit(undefined, 30)).toBe(30);
+  });
+
+  it("agent limit can be lower than settings", () => {
+    expect(resolveTurnLimit(10, 30)).toBe(10);
   });
 });
 

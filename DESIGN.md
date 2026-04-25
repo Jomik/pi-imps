@@ -113,7 +113,7 @@ The imp is unaware of the limit. It works normally until the final turn, when a 
 
 After that turn the session ends. The result returned to the delegator carries a `truncated` status (distinct from `completed` or `failed`), so the LLM knows the imp was cut off and can decide whether to re-delegate the remainder.
 
-The limit is a circuit breaker, not a budget. It exists to catch genuine runaways — loops, wrong approaches, hallucination spirals — not to manage workflow. If a task legitimately needs more than 25 turns, it should be decomposed into smaller subtasks.
+The limit is a circuit breaker, not a budget. It exists to catch genuine runaways — loops, wrong approaches, hallucination spirals — not to manage workflow. If an imp hits the limit, the task was too broad or under-specified; decompose it or tighten the prompt rather than raising the limit.
 ### Names
 
 Generated per imp, recycled when freed.

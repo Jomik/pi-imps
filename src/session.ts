@@ -105,7 +105,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   let totalUsage = { input: 0, output: 0 };
   let truncated = false;
 
-  const turnLimit = settings.turnLimit;
+  const turnLimit = resolveTurnLimit(config?.turnLimit, settings.turnLimit);
 
   function extractAssistantText(content: Array<{ type: string; text?: string }>) {
     const parts = content.filter((c): c is { type: "text"; text: string } => c.type === "text");
@@ -193,6 +193,13 @@ export function resolveToolAllowlist(
   settingsTools: string[] | undefined,
 ): string[] | undefined {
   return agentTools ?? settingsTools;
+}
+
+/**
+ * Resolve turn limit: agent frontmatter > settings default.
+ */
+export function resolveTurnLimit(agentLimit: number | undefined, settingsLimit: number): number {
+  return agentLimit ?? settingsLimit;
 }
 
 /**
