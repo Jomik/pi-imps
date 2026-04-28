@@ -91,7 +91,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     model,
     tools: toolAllowlist,
     sessionManager: SessionManager.inMemory(),
-    settingsManager: SettingsManager.inMemory(),
+    settingsManager: createImpSettingsManager(cwd),
     modelRegistry,
     resourceLoader: loader,
   });
@@ -203,6 +203,39 @@ export function resolveTurnLimit(agentLimit: number | undefined, settingsLimit: 
 }
 
 /**
+ * Create a settings manager for imp sessions with only runtime settings copied.
+ *
+ * Imps deliberately do not receive the caller's full settings because resource
+ * loading, model selection, persistence, and UI behavior are controlled by
+ * pi-imps. Runtime settings keep built-in tools and provider behavior aligned
+ * with the user's environment without expanding the imp configuration surface.
+ */
+export function createImpSettingsManager(
+  cwd: string,
+  settingsManager: SettingsManager = SettingsManager.create(cwd, getAgentDir()),
+): SettingsManager {
+  const settings = {
+    ...settingsManager.getGlobalSettings(),
+    ...settingsManager.getProjectSettings(),
+  };
+
+  return SettingsManager.inMemory({
+    branchSummary: settings.branchSummary,
+    compaction: settings.compaction,
+    defaultThinkingLevel: settings.defaultThinkingLevel,
+    enableInstallTelemetry: settings.enableInstallTelemetry,
+    followUpMode: settings.followUpMode,
+    images: settings.images,
+    retry: settings.retry,
+    shellCommandPrefix: settings.shellCommandPrefix,
+    shellPath: settings.shellPath,
+    steeringMode: settings.steeringMode,
+    thinkingBudgets: settings.thinkingBudgets,
+    transport: settings.transport,
+  });
+}
+
+/**
  * Decide whether an extension should be included in an imp session.
  *
  * - pi-imps is always excluded (no recursion)
@@ -249,9 +282,11 @@ export function getExtensionPackageName(ext: Extension): string | undefined {
 
   // Top-level: extract segment after baseDir/extensions/
   if (si.baseDir) {
-    const prefix = `${si.baseDir}/extensions/`;
-    if (si.path.startsWith(prefix)) {
-      const segment = si.path.slice(prefix.length).split("/")[0];
+    const baseDir = si.baseDir.replace(/\\/g, "/");
+    const sourcePath = si.path.replace(/\\/g, "/");
+    const prefix = `${baseDir}/extensions/`;
+    if (sourcePath.startsWith(prefix)) {
+      const segment = sourcePath.slice(prefix.length).split("/")[0];
       const pkgName = readPackageName(join(si.baseDir, "extensions", segment, "package.json"));
       if (pkgName) return pkgName;
       // Single-file extension: use filename without .ts
