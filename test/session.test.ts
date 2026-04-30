@@ -1,6 +1,11 @@
-import type { Extension } from "@mariozechner/pi-coding-agent";
+import { type Extension, SettingsManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { resolveToolAllowlist, resolveTurnLimit, shouldIncludeExtension } from "../src/session.js";
+import {
+  createImpSettingsManager,
+  resolveToolAllowlist,
+  resolveTurnLimit,
+  shouldIncludeExtension,
+} from "../src/session.js";
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -68,6 +73,85 @@ describe("resolveTurnLimit", () => {
 
   it("agent limit can be lower than settings", () => {
     expect(resolveTurnLimit(10, 30)).toBe(10);
+  });
+});
+
+// ─── createImpSettingsManager ────────────────────────────────────────────────
+
+describe("createImpSettingsManager", () => {
+  it("passes through runtime settings", () => {
+    const source = SettingsManager.inMemory({
+      branchSummary: { reserveTokens: 1234, skipPrompt: true },
+      compaction: { enabled: false, reserveTokens: 4321, keepRecentTokens: 1111 },
+      defaultThinkingLevel: "high",
+      enableInstallTelemetry: false,
+      followUpMode: "all",
+      images: { autoResize: false, blockImages: true },
+      retry: { enabled: false, maxRetries: 7, baseDelayMs: 99 },
+      shellCommandPrefix: "source ~/.bashrc",
+      shellPath: "/bin/zsh",
+      steeringMode: "all",
+      thinkingBudgets: { low: 1024 },
+      transport: "websocket",
+    });
+
+    const imp = createImpSettingsManager(process.cwd(), source);
+
+    expect(imp.getBranchSummarySettings()).toEqual({ reserveTokens: 1234, skipPrompt: true });
+    expect(imp.getCompactionSettings()).toEqual({ enabled: false, reserveTokens: 4321, keepRecentTokens: 1111 });
+    expect(imp.getDefaultThinkingLevel()).toBe("high");
+    expect(imp.getEnableInstallTelemetry()).toBe(false);
+    expect(imp.getFollowUpMode()).toBe("all");
+    expect(imp.getImageAutoResize()).toBe(false);
+    expect(imp.getBlockImages()).toBe(true);
+    expect(imp.getRetrySettings()).toMatchObject({ enabled: false, maxRetries: 7, baseDelayMs: 99 });
+    expect(imp.getShellCommandPrefix()).toBe("source ~/.bashrc");
+    expect(imp.getShellPath()).toBe("/bin/zsh");
+    expect(imp.getSteeringMode()).toBe("all");
+    expect(imp.getThinkingBudgets()).toEqual({ low: 1024 });
+    expect(imp.getTransport()).toBe("websocket");
+  });
+
+  it("does not pass through resource, model, persistence, or UI settings", () => {
+    const source = SettingsManager.inMemory({
+      defaultProvider: "anthropic",
+      defaultModel: "claude-test",
+      enabledModels: ["anthropic/*"],
+      extensions: ["pi-example"],
+      skills: ["skill-example"],
+      prompts: ["prompt-example"],
+      themes: ["theme-example"],
+      packages: ["pi-package"],
+      enableSkillCommands: false,
+      sessionDir: "/tmp/pi-sessions",
+      theme: "custom-theme",
+      terminal: { showImages: false, imageWidthCells: 12, clearOnShrink: true },
+      quietStartup: true,
+      hideThinkingBlock: true,
+      collapseChangelog: true,
+      npmCommand: ["pnpm"],
+    });
+
+    const imp = createImpSettingsManager(process.cwd(), source);
+
+    expect(imp.getDefaultProvider()).toBeUndefined();
+    expect(imp.getDefaultModel()).toBeUndefined();
+    expect(imp.getEnabledModels()).toBeUndefined();
+    expect(imp.getExtensionPaths()).toEqual([]);
+    expect(imp.getSkillPaths()).toEqual([]);
+    expect(imp.getPromptTemplatePaths()).toEqual([]);
+    expect(imp.getThemePaths()).toEqual([]);
+    expect(imp.getPackages()).toEqual([]);
+    expect(imp.getEnableSkillCommands()).toBe(true);
+    expect(imp.getSessionDir()).toBeUndefined();
+    expect(imp.getTheme()).toBeUndefined();
+    expect(imp.getShowImages()).toBe(true);
+    expect(imp.getImageWidthCells()).toBe(60);
+    expect(imp.getClearOnShrink()).toBe(false);
+    expect(imp.getQuietStartup()).toBe(false);
+    expect(imp.getHideThinkingBlock()).toBe(false);
+    expect(imp.getCollapseChangelog()).toBe(false);
+    expect(imp.getNpmCommand()).toBeUndefined();
   });
 });
 
