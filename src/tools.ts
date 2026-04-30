@@ -96,7 +96,7 @@ export function summonTool(
         // Verify the agent's model exists in the registry
         if (config.model) {
           const available = ctx.modelRegistry.getAvailable();
-          const resolved = available.find((m) => m.name === config!.model || m.id === config!.model);
+          const resolved = available.find((m) => m.name === config?.model || m.id === config?.model);
           if (!resolved) {
             namePool.release(name);
             const modelNames = available.map((m) => m.name).join(", ");
