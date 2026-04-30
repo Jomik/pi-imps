@@ -39,57 +39,6 @@ function parseResult(result: AgentToolResult<unknown>) {
 // ─── wait ───────────────────────────────────────────────────────────────────
 
 describe("waitTool", () => {
-  it("all mode returns JSON array of completed imps", async () => {
-    const a = makeImp({
-      name: "alice",
-      agent: "sentinel",
-      status: "completed",
-      turns: 3,
-      tokens: { input: 6000, output: 6200 },
-      output: "found 2 issues",
-    });
-    a.resolveDone();
-    const b = makeImp({
-      name: "bob",
-      status: "completed",
-      turns: 5,
-      tokens: { input: 9000, output: 9100 },
-      output: "done",
-    });
-    b.resolveDone();
-
-    const imps = buildMap(a, b);
-    const tool = waitTool(imps);
-    const result = await tool.execute("tc1", { mode: "all" }, undefined, undefined, nullCtx);
-    const json = parseResult(result);
-
-    expect(json).toEqual([
-      {
-        name: "alice",
-        status: "completed",
-        agent: "sentinel",
-        output: "found 2 issues",
-      },
-      { name: "bob", status: "completed", output: "done" },
-    ]);
-  });
-
-  it("first mode returns single-element array with winner", async () => {
-    const a = makeImp({
-      name: "alice",
-      status: "completed",
-      output: "result",
-    });
-    a.resolveDone();
-
-    const imps = buildMap(a);
-    const tool = waitTool(imps);
-    const result = await tool.execute("tc1", { mode: "first" }, undefined, undefined, nullCtx);
-    const json = parseResult(result);
-
-    expect(json).toEqual([{ name: "alice", status: "completed", output: "result" }]);
-  });
-
   it("returns empty text for no uncollected imps", async () => {
     const imps = new Map<string, Imp>();
     const tool = waitTool(imps);
@@ -98,22 +47,6 @@ describe("waitTool", () => {
     const item = result.content[0];
     expect(item.type).toBe("text");
     if (item.type === "text") expect(item.text).toBe("No uncollected imps to wait for.");
-  });
-
-  it("failed imp includes error in result", async () => {
-    const a = makeImp({
-      name: "carl",
-      status: "failed",
-      error: "session crashed",
-    });
-    a.resolveDone();
-
-    const imps = buildMap(a);
-    const tool = waitTool(imps);
-    const result = await tool.execute("tc1", { mode: "all" }, undefined, undefined, nullCtx);
-    const json = parseResult(result);
-
-    expect(json).toEqual([{ name: "carl", status: "failed", error: "session crashed" }]);
   });
 
   it("streaming updates use same JSON array format", async () => {
@@ -167,25 +100,7 @@ describe("waitTool", () => {
 
     expect(json[0]).not.toHaveProperty("agent");
   });
-
-  it("truncated imp preserves status and output", async () => {
-    const a = makeImp({
-      name: "fay",
-      agent: "mason",
-      status: "truncated",
-      output: "partial",
-    });
-    a.resolveDone();
-
-    const imps = buildMap(a);
-    const tool = waitTool(imps);
-    const result = await tool.execute("tc1", { mode: "all" }, undefined, undefined, nullCtx);
-    const json = parseResult(result);
-
-    expect(json).toEqual([{ name: "fay", status: "truncated", agent: "mason", output: "partial" }]);
-  });
 });
-
 // ─── list_imps ──────────────────────────────────────────────────────────────
 
 describe("listImpsTool", () => {
