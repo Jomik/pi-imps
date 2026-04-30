@@ -1,6 +1,11 @@
-import { SettingsManager, type Extension } from "@mariozechner/pi-coding-agent";
+import { type Extension, SettingsManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { createImpSettingsManager, resolveToolAllowlist, resolveTurnLimit, shouldIncludeExtension } from "../src/session.js";
+import {
+  createImpSettingsManager,
+  resolveToolAllowlist,
+  resolveTurnLimit,
+  shouldIncludeExtension,
+} from "../src/session.js";
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
