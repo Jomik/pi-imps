@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, AgentSource } from "./types.js";
 
 function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {

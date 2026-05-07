@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig, ImpSettings } from "../src/types.js";
 import { createMockContext, createMockSession, type MockSessionConfig } from "./helpers/index.js";
@@ -7,8 +7,8 @@ import { createMockContext, createMockSession, type MockSessionConfig } from "./
 
 const sessionRef: { current: ReturnType<typeof createMockSession> | null } = { current: null };
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const real = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
   return {
     ...real,
     // biome-ignore lint/style/noNonNullAssertion: set by installMock before spawn reaches createAgentSession
@@ -18,7 +18,7 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
 
 // Import AFTER vi.mock so src/session.ts picks up the mocked createAgentSession
 const { summonTool, waitTool, dismissTool } = await import("../src/tools.js");
-const { createAgentSession } = await import("@mariozechner/pi-coding-agent");
+const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

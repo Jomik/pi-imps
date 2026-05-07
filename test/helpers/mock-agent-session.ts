@@ -1,4 +1,4 @@
-import type { AgentSession, AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 // ─── Config & Controls ────────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ export function createMockSession(config: MockSessionConfig = {}): {
 
   // Stub AssistantMessage builder. src/session.ts only reads role, usage.{input,output},
   // and content[].{type,text}; the remaining fields exist solely to satisfy the SDK type
-  // so a future shape change in @mariozechner/pi-ai/pi-coding-agent fails this build.
+  // so a future shape change in @earendil-works/pi-ai/pi-coding-agent fails this build.
   const makeAssistantMessage = (text: string, usage: { input: number; output: number }) => ({
     role: "assistant" as const,
     content: [{ type: "text" as const, text }],

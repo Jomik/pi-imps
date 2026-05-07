@@ -1,4 +1,4 @@
-import { getAgentDir, SettingsManager } from "@mariozechner/pi-coding-agent";
+import { getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { ImpSettings } from "./types.js";
 
 const DEFAULTS: ImpSettings = {

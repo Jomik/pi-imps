@@ -4,8 +4,8 @@ import type {
   ExtensionContext,
   Theme,
   ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { formatImpStatusDisplay, formatSummonDisplay, formatWaitDisplay } from "./display.js";
 import { spawnImpSession } from "./session.js";
