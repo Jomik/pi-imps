@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/Jomik/pi-imps/compare/v0.3.0...v0.4.0) (2026-05-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* migrate npm scope from @mariozechner to @earendil-works ([#10](https://github.com/Jomik/pi-imps/issues/10))
+
+### Features
+
+* migrate npm scope from [@mariozechner](https://github.com/mariozechner) to [@earendil-works](https://github.com/earendil-works) ([#10](https://github.com/Jomik/pi-imps/issues/10)) ([4113b40](https://github.com/Jomik/pi-imps/commit/4113b40d8d176ea3cf547466ba3710488f6fd1ab))
+
 ## [0.3.0](https://github.com/Jomik/pi-imps/compare/v0.2.0...v0.3.0) (2026-04-30)
 
 
