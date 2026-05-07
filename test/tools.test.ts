@@ -1,4 +1,4 @@
-import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { dismissTool, listImpsTool, waitTool } from "../src/tools.js";
 import type { Imp } from "../src/types.js";

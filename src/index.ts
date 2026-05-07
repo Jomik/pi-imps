@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildAgentsBlock, discoverAgents } from "./agents.js";
 import { createNamePool } from "./names.js";
 import { loadImpSettings } from "./settings.js";

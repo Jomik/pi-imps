@@ -1,5 +1,5 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ExtensionContext, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 const mockModel = { id: "mock", name: "mock", api: { id: "mock" } } as unknown as Model<Api>;
 

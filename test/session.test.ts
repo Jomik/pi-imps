@@ -1,4 +1,4 @@
-import { type Extension, SettingsManager } from "@mariozechner/pi-coding-agent";
+import { type Extension, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   createImpSettingsManager,
