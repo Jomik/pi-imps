@@ -1,4 +1,6 @@
-import { getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ImpSettings } from "./types.js";
 
 const DEFAULTS: ImpSettings = {
@@ -26,11 +28,22 @@ export function parseImpSettings(block: Record<string, unknown> | undefined): Im
 }
 
 /**
- * Load pi-imps settings from the "pi-imps" key in global settings.json.
- * Falls back to defaults for missing fields.
+ * Load pi-imps settings from ~/.pi/agent/imps.json.
+ * Returns defaults if the file doesn't exist.
+ * Throws on invalid JSON or read errors (permissions, etc.).
  */
-export function loadImpSettings(settingsManager?: SettingsManager): ImpSettings {
-  const sm = settingsManager ?? SettingsManager.create(process.cwd(), getAgentDir());
-  const raw = sm.getGlobalSettings() as Record<string, unknown>;
-  return parseImpSettings(raw["pi-imps"] as Record<string, unknown> | undefined);
+export function loadImpSettings(agentDir?: string): ImpSettings {
+  const dir = agentDir ?? getAgentDir();
+  const configPath = join(dir, "imps.json");
+  let content: string;
+  try {
+    content = readFileSync(configPath, "utf-8");
+  } catch (err: unknown) {
+    if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { ...DEFAULTS };
+    }
+    throw err;
+  }
+  const raw = JSON.parse(content);
+  return parseImpSettings(raw);
 }

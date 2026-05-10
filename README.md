@@ -63,11 +63,11 @@ Ephemeral imps (summoned without an `agent` name) inherit the parent session's m
 
 Control which tools imps have access to at two levels:
 
-- **Settings** (`~/.pi/agent/settings.json`): default for all imps
+- **`~/.pi/agent/imps.json`**: default for all imps
 - **Agent frontmatter**: per-agent override
 
 ```json
-"pi-imps": {
+{
   "toolAllowlist": ["read", "edit", "bash", "write"]
 }
 ```
@@ -78,10 +78,10 @@ When a tool allowlist is active, extensions that provide no allowed tools are **
 
 ### Additional extensions
 
-Some extensions should always load on imp sessions regardless of the tool allowlist — permission systems, sandboxing, audit logging. Configure these in settings:
+Some extensions should always load on imp sessions regardless of the tool allowlist — permission systems, sandboxing, audit logging. Configure in `~/.pi/agent/imps.json`:
 
 ```json
-"pi-imps": {
+{
   "additionalExtensions": ["pi-sandbox"]
 }
 ```
@@ -112,10 +112,11 @@ Imps are leaf workers. They cannot summon sub-imps — pi-imps is not loaded on 
 
 ## Settings reference
 
-All settings are optional. Add a `"pi-imps"` key to `~/.pi/agent/settings.json`:
+All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
 
 ```json
-"pi-imps": {
+{
+  "$schema": "https://github.com/Jomik/pi-imps/blob/main/imps.schema.json",
   "turnLimit": 30,
   "toolAllowlist": ["read", "edit", "bash", "write", "web_search"],
   "additionalExtensions": ["pi-sandbox"]

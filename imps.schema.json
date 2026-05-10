@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Jomik/pi-imps/blob/main/imps.schema.json",
+  "title": "pi-imps configuration",
+  "description": "Global configuration for pi-imps. Place at ~/.pi/agent/imps.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference (optional self-reference)"
+    },
+    "turnLimit": {
+      "type": "integer",
+      "minimum": 2,
+      "default": 30,
+      "description": "Max turns before an imp is cut off. Acts as a circuit breaker for runaway imps."
+    },
+    "toolAllowlist": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Default tool allowlist for all imps. Omit to allow all tools. Agent frontmatter `tools` overrides this per-agent."
+    },
+    "additionalExtensions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Extensions that always load on imp sessions regardless of tool filtering. Agent frontmatter cannot override this."
+    }
+  }
+}
