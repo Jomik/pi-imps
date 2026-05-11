@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/Jomik/pi-imps/compare/v0.4.0...v0.5.0) (2026-05-11)
+
+
+### Features
+
+* move global config to dedicated ~/.pi/agent/imps.json with JSON Schema ([#12](https://github.com/Jomik/pi-imps/issues/12)) ([59e8615](https://github.com/Jomik/pi-imps/commit/59e8615d0cf4bd4c7eb7d53fb320f5feb5f53952))
+
 ## [0.4.0](https://github.com/Jomik/pi-imps/compare/v0.3.0...v0.4.0) (2026-05-07)
 
 
