@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/Jomik/pi-imps/compare/v0.5.0...v0.6.0) (2026-05-24)
+
+
+### Features
+
+* project-level imps.json for per-agent additive tools ([#14](https://github.com/Jomik/pi-imps/issues/14)) ([1928398](https://github.com/Jomik/pi-imps/commit/192839883ccb8d64e91ca41935c8977dc40b38b8))
+
 ## [0.5.0](https://github.com/Jomik/pi-imps/compare/v0.4.0...v0.5.0) (2026-05-11)
 
 
