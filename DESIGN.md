@@ -91,16 +91,52 @@ Ephemeral, in-memory, no persistence. Ephemeral imps inherit the parent's model;
 
 ### Tools
 
-Configurable at two levels:
+Configurable at three levels:
 
-- **Settings**: default tool allowlist for all imps
-- **Agent frontmatter**: per-agent override
+- **Settings** (`~/.pi/agent/imps.json`): default tool allowlist and per-agent additive tools
+- **Agent frontmatter**: per-agent baseline tools
+- **Project config** (`.pi/imps.json`): per-agent additive tools scoped to this project
 
-Absence means all tools. Empty list means no tools.
+Resolution at summon time:
 
-At summon time, pi-imps resolves the allowlist and filters extensions accordingly — extensions that provide no allowed tools are excluded entirely (no prompt injection, no event hooks, no tools). Core pi tools (read, edit, bash, write) follow the same rule: available unless explicitly excluded.
+1. Determine the **base allowlist**:
+   - Named agent with `tools` in frontmatter → use frontmatter tools
+   - Named agent without `tools` → use settings `toolAllowlist` (or undefined = all tools)
+   - Ephemeral imp → use settings `toolAllowlist` (or undefined = all tools)
+2. Compute **additive tools**: union of `agents.<key>.tools` from global `imps.json` and project `.pi/imps.json`, where `<key>` is the agent name (or `"_"` for ephemeral imps)
+3. Merge: if base is undefined (all tools), result is undefined (all tools) — additive tools are redundant since all tools are already available. If base is defined, result is `base ∪ additive`.
+4. Filter extensions: exclude any that provide no tools in the final allowlist
 
-**Additional extensions** (settings-only) always load on imp sessions regardless of the tool allowlist. Use for permission systems, sandboxing, logging, or other extensions that must not be filtered out. Agent frontmatter cannot override this.
+Absence of frontmatter `tools` means the imp inherits the same tools as the parent session (no filtering applied). An empty list (`tools: []`) means no tools. Additive tools can only expand the base, never restrict it.
+
+If a tool name in the config doesn't correspond to a registered tool, it's silently ignored — the imp simply doesn't get that tool. (Future: surface a warning to the user.)
+
+**Additional extensions** (global `imps.json` only, `additionalExtensions` key) always load on imp sessions regardless of the tool allowlist. Use for permission systems, sandboxing, logging, or other extensions that must not be filtered out. Agent frontmatter and project config cannot override this.
+
+#### Project-level imps.json
+
+Project config lives at `.pi/imps.json` (project root). Both project and global `~/.pi/agent/imps.json` can contain an `agents` object with per-agent tool grants. Their `tools` arrays are unioned (not overridden) — if global grants `["a"]` and project grants `["b"]`, the agent gets both.
+
+```json
+{
+  "agents": {
+    "mason": { "tools": ["run_tests", "run_checks"] },
+    "sentinel": { "tools": ["run_tests", "run_checks"] }
+  }
+}
+```
+
+This allows projects to grant agents access to project-specific tools (e.g. armory tools like `run_tests`) without modifying global agent definitions.
+
+For ephemeral (unnamed) imps, use the key `"_"`:
+
+```json
+{
+  "agents": {
+    "_": { "tools": ["run_tests"] }
+  }
+}
+```
 
 
 ### Turn Limit

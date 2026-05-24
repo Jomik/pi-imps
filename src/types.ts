@@ -45,4 +45,14 @@ export interface ImpSettings {
   toolAllowlist: string[] | undefined;
   /** Extensions that always load on imp sessions regardless of tool filtering */
   additionalExtensions: string[];
+  /** Per-agent additive tool grants from global ~/.pi/agent/imps.json */
+  agents: Record<string, { tools?: string[] }>;
+}
+
+/**
+ * Project-level imp configuration from .pi/imps.json.
+ * Can only add tools to agents — never remove.
+ */
+export interface ProjectImpConfig {
+  agents?: Record<string, { tools?: string[] }>;
 }

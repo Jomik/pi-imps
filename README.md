@@ -119,7 +119,10 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
   "$schema": "https://github.com/Jomik/pi-imps/blob/main/imps.schema.json",
   "turnLimit": 30,
   "toolAllowlist": ["read", "edit", "bash", "write", "web_search"],
-  "additionalExtensions": ["pi-sandbox"]
+  "additionalExtensions": ["pi-sandbox"],
+  "agents": {
+    "mason": { "tools": ["run_tests"] }
+  }
 }
 ```
 
@@ -128,6 +131,11 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
 | `turnLimit` | number | 30 | Max turns per imp (minimum 2) |
 | `toolAllowlist` | string[] | all tools | Default tool allowlist for all imps. Overridden by agent frontmatter `tools`. |
 | `additionalExtensions` | string[] | none | Extensions that always load on imp sessions regardless of tool filtering |
+| `agents` | object | none | Per-agent additive tool grants. Keys are agent names (`"_"` for ephemeral). Tools are unioned with the agent's frontmatter. |
+
+### Project config
+
+A project-level `.pi/imps.json` in the project root supports the same `agents` format. Tool grants from project config are additive — they are unioned with any grants from the global config, not overriding them. This lets projects grant access to project-specific tools (e.g. `run_tests`) without modifying global agent definitions.
 
 ## Design
 

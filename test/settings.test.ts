@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadImpSettings, parseImpSettings } from "../src/settings.js";
+import { loadImpSettings, loadProjectConfig, parseImpSettings } from "../src/settings.js";
 
 describe("parseImpSettings", () => {
   it("returns defaults when block is undefined", () => {
@@ -10,6 +10,7 @@ describe("parseImpSettings", () => {
     expect(settings.turnLimit).toBe(30);
     expect(settings.toolAllowlist).toBeUndefined();
     expect(settings.additionalExtensions).toEqual([]);
+    expect(settings.agents).toEqual({});
   });
 
   it("returns defaults when block is empty", () => {
@@ -17,6 +18,7 @@ describe("parseImpSettings", () => {
     expect(settings.turnLimit).toBe(30);
     expect(settings.toolAllowlist).toBeUndefined();
     expect(settings.additionalExtensions).toEqual([]);
+    expect(settings.agents).toEqual({});
   });
 
   it("reads turnLimit", () => {
@@ -76,6 +78,57 @@ describe("parseImpSettings", () => {
     expect(settings.toolAllowlist).toEqual(["read", "edit", "bash"]);
     expect(settings.additionalExtensions).toEqual(["pi-sandbox", "pi-audit"]);
   });
+
+  // ── agents field ──────────────────────────────────────────────────────
+
+  it("reads agents config", () => {
+    const settings = parseImpSettings({
+      agents: {
+        mason: { tools: ["run_tests", "run_checks"] },
+        sentinel: { tools: ["run_tests"] },
+      },
+    });
+    expect(settings.agents).toEqual({
+      mason: { tools: ["run_tests", "run_checks"] },
+      sentinel: { tools: ["run_tests"] },
+    });
+  });
+
+  it("reads ephemeral agent key '_'", () => {
+    const settings = parseImpSettings({
+      agents: { _: { tools: ["run_tests"] } },
+    });
+    expect(settings.agents._).toEqual({ tools: ["run_tests"] });
+  });
+
+  it("returns empty agents when agents is not an object", () => {
+    expect(parseImpSettings({ agents: "invalid" }).agents).toEqual({});
+    expect(parseImpSettings({ agents: ["bad"] }).agents).toEqual({});
+  });
+
+  it("skips agent entries that are not objects", () => {
+    const settings = parseImpSettings({
+      agents: { mason: "bad", sentinel: { tools: ["run_tests"] } },
+    });
+    expect(settings.agents).toEqual({ sentinel: { tools: ["run_tests"] } });
+  });
+
+  it("agent entry without tools field becomes empty object", () => {
+    const settings = parseImpSettings({ agents: { mason: {} } });
+    expect(settings.agents.mason).toEqual({});
+  });
+
+  it("ignores non-array tools in agent entry", () => {
+    const settings = parseImpSettings({ agents: { mason: { tools: "run_tests" } } });
+    expect(settings.agents.mason).toEqual({});
+  });
+
+  it("filters invalid elements from tools array", () => {
+    const settings = parseImpSettings({
+      agents: { mason: { tools: ["run_tests", 1, null, ""] } },
+    });
+    expect(settings.agents.mason).toEqual({ tools: ["run_tests"] });
+  });
 });
 
 describe("loadImpSettings", () => {
@@ -124,10 +177,71 @@ describe("loadImpSettings", () => {
     expect(settings.additionalExtensions).toEqual(["pi-sandbox"]);
   });
 
+  it("reads agents from imps.json", () => {
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["run_tests"] } } }));
+    const settings = loadImpSettings(tmpDir);
+    expect(settings.agents).toEqual({ mason: { tools: ["run_tests"] } });
+  });
+
   it("ignores unknown fields via parseImpSettings validation", () => {
     writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ turnLimit: 10, unknown: true }));
     const settings = loadImpSettings(tmpDir);
     expect(settings.turnLimit).toBe(10);
     expect((settings as unknown as Record<string, unknown>).unknown).toBeUndefined();
+  });
+});
+
+// ─── loadProjectConfig ───────────────────────────────────────────────
+
+describe("loadProjectConfig", () => {
+  let tmpDir: string;
+  let piDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-imps-proj-"));
+    piDir = join(tmpDir, ".pi");
+    mkdirSync(piDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns empty config when .pi/imps.json does not exist", () => {
+    const config = loadProjectConfig(tmpDir);
+    expect(config).toEqual({});
+  });
+
+  it("returns empty config when .pi directory does not exist", () => {
+    rmSync(piDir, { recursive: true, force: true });
+    const config = loadProjectConfig(tmpDir);
+    expect(config).toEqual({});
+  });
+
+  it("throws on invalid JSON", () => {
+    writeFileSync(join(piDir, "imps.json"), "not-json");
+    expect(() => loadProjectConfig(tmpDir)).toThrow(SyntaxError);
+  });
+
+  it("reads agents config", () => {
+    writeFileSync(
+      join(piDir, "imps.json"),
+      JSON.stringify({ agents: { mason: { tools: ["run_tests", "run_checks"] } } }),
+    );
+    const config = loadProjectConfig(tmpDir);
+    expect(config.agents).toEqual({ mason: { tools: ["run_tests", "run_checks"] } });
+  });
+
+  it("reads ephemeral agent '_' key", () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { _: { tools: ["run_tests"] } } }));
+    const config = loadProjectConfig(tmpDir);
+    expect(config.agents?._).toEqual({ tools: ["run_tests"] });
+  });
+
+  it("validates agents: ignores non-array tools", () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: "run_tests" } } }));
+    const config = loadProjectConfig(tmpDir);
+    // tools: "run_tests" (string) should be rejected; entry becomes {}
+    expect(config.agents?.mason).toEqual({});
   });
 });

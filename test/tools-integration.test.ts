@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig, ImpSettings } from "../src/types.js";
 import { createMockContext, createMockSession, type MockSessionConfig } from "./helpers/index.js";
 
@@ -13,6 +16,10 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     ...real,
     // biome-ignore lint/style/noNonNullAssertion: set by installMock before spawn reaches createAgentSession
     createAgentSession: vi.fn(async () => ({ session: sessionRef.current!.session })),
+    // Stub resource loader to avoid real I/O in integration tests
+    DefaultResourceLoader: class {
+      async reload() {}
+    },
   };
 });
 
@@ -29,7 +36,7 @@ function parseResult(r: AgentToolResult<unknown>) {
 }
 
 function makeSettings(overrides: Partial<ImpSettings> = {}): ImpSettings {
-  return { turnLimit: 30, toolAllowlist: undefined, additionalExtensions: [], ...overrides };
+  return { turnLimit: 30, toolAllowlist: undefined, additionalExtensions: [], agents: {}, ...overrides };
 }
 
 function makeNamePool() {
@@ -220,6 +227,70 @@ describe("summon error paths", () => {
     if (item.type === "text") expect(item.text).toContain("Unknown agent");
     expect(vi.mocked(createAgentSession)).not.toHaveBeenCalled();
     expect(namePool.released).toContain("imp-1");
+  });
+});
+
+describe("project config tools", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-imps-pct-"));
+    mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("named agent: unions frontmatter tools with project config tools", async () => {
+    writeFileSync(join(tmpDir, ".pi", "imps.json"), JSON.stringify({ agents: { coder: { tools: ["run_tests"] } } }));
+
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext({ cwd: tmpDir });
+    installMock({ totalTurns: 1 });
+
+    const agentConfig: AgentConfig = {
+      name: "coder",
+      description: "A coding agent",
+      tools: ["read", "edit"],
+      systemPrompt: "You are a coding agent.",
+      source: "user",
+      filePath: "/tmp/coder.md",
+    };
+
+    const summon = summonTool(imps, [agentConfig], namePool, makeSettings());
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+    await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+
+    expect(vi.mocked(createAgentSession)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.arrayContaining(["read", "edit", "run_tests"]),
+      }),
+    );
+  });
+
+  it("ephemeral imp: unions settings toolAllowlist with project config '_' tools", async () => {
+    writeFileSync(join(tmpDir, ".pi", "imps.json"), JSON.stringify({ agents: { _: { tools: ["lint"] } } }));
+
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext({ cwd: tmpDir });
+    installMock({ totalTurns: 1 });
+
+    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings({ toolAllowlist: ["read"] }));
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+    await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+
+    expect(vi.mocked(createAgentSession)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.arrayContaining(["read", "lint"]),
+      }),
+    );
   });
 });
 

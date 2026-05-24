@@ -10,6 +10,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
+import { loadProjectConfig } from "./settings.js";
 import type { AgentConfig, ImpSettings } from "./types.js";
 
 const OWN_PACKAGE_NAME = pkg.name;
@@ -57,7 +58,14 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
 
   const systemPrompt = config?.systemPrompt;
 
-  const toolAllowlist = resolveToolAllowlist(config?.tools, settings.toolAllowlist);
+  // Load project config and resolve per-agent additive tools
+  const projectConfig = loadProjectConfig(cwd);
+  const agentKey = config?.name ?? "_";
+  const globalAgentTools = settings.agents[agentKey]?.tools;
+  const projectAgentTools = projectConfig.agents?.[agentKey]?.tools;
+  const additiveTools = mergeAdditiveTools(globalAgentTools, projectAgentTools);
+
+  const toolAllowlist = resolveToolAllowlist(config?.tools, settings.toolAllowlist, additiveTools);
 
   const loader = new DefaultResourceLoader({
     cwd,
@@ -186,13 +194,30 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
 
 /**
  * Resolve tool allowlist: agent frontmatter > settings default > all.
+ * additiveTools are unioned in when the base is defined (project/global can only add).
  * Returns undefined (all tools) or a string array (only those tools).
  */
 export function resolveToolAllowlist(
   agentTools: string[] | undefined,
   settingsTools: string[] | undefined,
+  additiveTools?: string[],
 ): string[] | undefined {
-  return agentTools ?? settingsTools;
+  const base = agentTools ?? settingsTools;
+  // If base is undefined → all tools; project config can't restrict further
+  if (base === undefined) return undefined;
+  // Base is defined (possibly empty); union with additive tools
+  if (!additiveTools || additiveTools.length === 0) return base;
+  const result = [...base];
+  for (const tool of additiveTools) {
+    if (!result.includes(tool)) result.push(tool);
+  }
+  return result;
+}
+
+/** Union two optional tool arrays, deduplicating. Returns undefined if both are absent. */
+function mergeAdditiveTools(a: string[] | undefined, b: string[] | undefined): string[] | undefined {
+  if (!a && !b) return undefined;
+  return [...new Set([...(a ?? []), ...(b ?? [])])];
 }
 
 /**

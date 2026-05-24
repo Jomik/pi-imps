@@ -58,6 +58,40 @@ describe("resolveToolAllowlist", () => {
   it("settings empty array means no tools", () => {
     expect(resolveToolAllowlist(undefined, [])).toEqual([]);
   });
+
+  // ── additive tools (project / global agent config) ──────────────────────
+
+  it("unions additive tools into base", () => {
+    expect(resolveToolAllowlist(["read"], undefined, ["run_tests"])).toEqual(["read", "run_tests"]);
+  });
+
+  it("unions additive tools into settings fallback", () => {
+    expect(resolveToolAllowlist(undefined, ["read"], ["run_tests"])).toEqual(["read", "run_tests"]);
+  });
+
+  it("deduplicates when additive tools overlap base", () => {
+    expect(resolveToolAllowlist(["read", "bash"], undefined, ["bash", "run_tests"])).toEqual([
+      "read",
+      "bash",
+      "run_tests",
+    ]);
+  });
+
+  it("additive tools extend empty base (adding to no-tools)", () => {
+    expect(resolveToolAllowlist([], undefined, ["run_tests"])).toEqual(["run_tests"]);
+  });
+
+  it("undefined base stays undefined even with additive tools (all-tools wins)", () => {
+    expect(resolveToolAllowlist(undefined, undefined, ["run_tests"])).toBeUndefined();
+  });
+
+  it("empty additive tools leaves base unchanged", () => {
+    expect(resolveToolAllowlist(["read"], undefined, [])).toEqual(["read"]);
+  });
+
+  it("undefined additive tools leaves base unchanged", () => {
+    expect(resolveToolAllowlist(["read"], undefined, undefined)).toEqual(["read"]);
+  });
 });
 
 // ─── resolveTurnLimit ──────────────────────────────────────────────────────

@@ -26,6 +26,21 @@
       "items": { "type": "string" },
       "default": [],
       "description": "Extensions that always load on imp sessions regardless of tool filtering. Agent frontmatter cannot override this."
+    },
+    "agents": {
+      "type": "object",
+      "description": "Per-agent additive tool grants. Keys are agent names (use \"_\" for ephemeral imps). Tools listed here are unioned with the agent's frontmatter tools.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "tools": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Additional tools to grant this agent beyond its frontmatter baseline."
+          }
+        },
+        "additionalProperties": false
+      }
     }
   }
 }
