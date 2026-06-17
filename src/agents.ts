@@ -66,7 +66,8 @@ export function discoverAgents(cwd: string): AgentConfig[] {
   for (const a of userAgents) byName.set(a.name, a);
   for (const a of projectAgents) byName.set(a.name, a);
 
-  return Array.from(byName.values());
+  // Sort by name for deterministic, cache-stable ordering across sessions
+  return Array.from(byName.values()).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 /**

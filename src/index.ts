@@ -10,19 +10,22 @@ export default function (pi: ExtensionAPI): void {
   const imps: Map<string, Imp> = new Map();
   const namePool = createNamePool();
   const agents: AgentConfig[] = [];
+  // Cached once per session_start; empty string means no agents.
+  let agentsBlock = "";
 
   // ── Agent discovery ────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx) => {
-    agents.splice(0, agents.length, ...discoverAgents(ctx.cwd));
+    const discovered = discoverAgents(ctx.cwd);
+    agents.splice(0, agents.length, ...discovered);
+    agentsBlock = buildAgentsBlock(discovered);
   });
 
   // ── System prompt injection ────────────────────────────────────────────
 
   pi.on("before_agent_start", (event) => {
-    if (agents.length === 0) return;
-    const block = buildAgentsBlock(agents);
-    return { systemPrompt: `${event.systemPrompt}\n\n${block}` };
+    if (!agentsBlock) return;
+    return { systemPrompt: `${event.systemPrompt}\n\n${agentsBlock}` };
   });
 
   // ── Footer: running imp count ──────────────────────────────────────────
