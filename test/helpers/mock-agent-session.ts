@@ -23,6 +23,8 @@ export interface MockSessionControls {
   }): Promise<void>;
   finish(finalText?: string): void;
   fail(message: string): void;
+  /** Emit auto_retry_end with success=false then resolve the promise (provider failure path). */
+  failWithProviderEvent(message: string): void;
 }
 
 // ─── Minimal mock surface ─────────────────────────────────────────────────────
@@ -115,6 +117,19 @@ export function createMockSession(config: MockSessionConfig = {}): {
 
     fail(message) {
       pendingFail?.(message);
+    },
+
+    failWithProviderEvent(message) {
+      // Emit the provider-failure event so session.ts captures it
+      const evt = {
+        type: "auto_retry_end" as const,
+        success: false,
+        attempt: 1,
+        finalError: message,
+      } satisfies AgentSessionEvent;
+      for (const l of listeners) l(evt);
+      // Resolve (not reject) — provider failure surfaces via event, not exception
+      pendingFinish?.();
     },
   };
 

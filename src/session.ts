@@ -112,6 +112,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   let lastOutput = "";
   let totalUsage = { input: 0, output: 0 };
   let truncated = false;
+  let providerError: string | undefined;
 
   const turnLimit = resolveTurnLimit(config?.turnLimit, settings.turnLimit);
 
@@ -122,6 +123,10 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
 
   session.subscribe((event) => {
     if (signal.aborted) return;
+
+    if (event.type === "auto_retry_end" && !event.success) {
+      providerError = event.finalError ?? "Provider request failed";
+    }
 
     if (event.type === "tool_execution_start") {
       const toolName = event.toolName;
@@ -175,7 +180,11 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   session
     .prompt(task)
     .then(() => {
-      onComplete({ output: lastOutput, truncated });
+      if (truncated) {
+        onComplete({ output: lastOutput, truncated: true });
+      } else {
+        onComplete({ output: lastOutput, error: providerError });
+      }
     })
     .catch((err) => {
       // Abort due to truncation is not an error

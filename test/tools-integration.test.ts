@@ -56,6 +56,16 @@ function installMock(config: MockSessionConfig = {}) {
   return sessionRef.current;
 }
 
+async function waitForPromptStart(mock: ReturnType<typeof createMockSession>, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!mock.controls.promptStarted) {
+    if (Date.now() > deadline) {
+      throw new Error("timed out waiting for imp prompt to start");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 // ─── Reset mock implementation before each test ───────────────────────────────
 
 beforeEach(() => {
@@ -102,6 +112,28 @@ describe("summon → wait integration", () => {
 
     expect(json[0].status).toBe("failed");
     expect(json[0].error).toBe("session crashed");
+  });
+
+  it("provider failure via auto_retry_end event yields status=failed", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+    const mock = installMock({}); // manual control — no totalTurns
+
+    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings());
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+
+    // Simulate provider exhausting retries after the prompt has started: emits auto_retry_end then resolves
+    await waitForPromptStart(mock);
+    mock.controls.failWithProviderEvent("API key invalid");
+
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    const json = parseResult(result);
+
+    expect(json[0].status).toBe("failed");
+    expect(json[0].error).toBe("API key invalid");
   });
 
   it("turn limit triggers steer with FINAL TURN directive and truncates", async () => {
