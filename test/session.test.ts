@@ -2,6 +2,7 @@ import { type Extension, SettingsManager } from "@earendil-works/pi-coding-agent
 import { describe, expect, it } from "vitest";
 import {
   createImpSettingsManager,
+  resolveImpThinkingLevel,
   resolveToolAllowlist,
   resolveTurnLimit,
   shouldIncludeExtension,
@@ -35,6 +36,19 @@ function makeExt(
     shortcuts: new Map(),
   } as Extension;
 }
+
+// ─── resolveImpThinkingLevel ───────────────────────────────────────────────
+
+describe("resolveImpThinkingLevel", () => {
+  it("maps host max thinking to xhigh for the local SDK boundary", () => {
+    expect(resolveImpThinkingLevel("max")).toBe("xhigh");
+  });
+
+  it("preserves SDK-supported thinking levels", () => {
+    expect(resolveImpThinkingLevel("off")).toBe("off");
+    expect(resolveImpThinkingLevel("high")).toBe("high");
+  });
+});
 
 // ─── resolveToolAllowlist ──────────────────────────────────────────────────
 

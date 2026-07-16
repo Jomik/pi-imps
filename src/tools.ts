@@ -8,7 +8,7 @@ import type {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { formatImpStatusDisplay, formatSummonDisplay, formatSummonTaskPreview, formatWaitDisplay } from "./display.js";
-import { spawnImpSession } from "./session.js";
+import { spawnImpSession, type ThinkingLevel } from "./session.js";
 import { allImps, findImp, uncollectedImps } from "./state.js";
 import type { AgentConfig, Imp, ImpSettings, ImpSnapshot } from "./types.js";
 
@@ -57,6 +57,7 @@ export function summonTool(
   agents: AgentConfig[],
   namePool: { allocate(): string; release(name: string): void },
   settings: ImpSettings,
+  getParentThinkingLevel: () => ThinkingLevel = () => "medium",
 ): ToolDefinition<typeof SummonParams, SummonDetails | undefined> {
   return {
     name: "summon",
@@ -155,6 +156,7 @@ export function summonTool(
         config,
         cwd: ctx.cwd,
         parentModel,
+        parentThinkingLevel: getParentThinkingLevel(),
         modelRegistry: ctx.modelRegistry,
         signal: controller.signal,
         settings,

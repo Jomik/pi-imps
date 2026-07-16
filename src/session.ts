@@ -1,7 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { AgentSession, Extension, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentSession,
+  CreateAgentSessionOptions,
+  Extension,
+  ModelRegistry,
+} from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -15,6 +20,17 @@ import type { AgentConfig, ImpSettings } from "./types.js";
 
 const OWN_PACKAGE_NAME = pkg.name;
 
+type SdkThinkingLevel = NonNullable<CreateAgentSessionOptions["thinkingLevel"]>;
+const MAX_COMPAT_THINKING_LEVEL: SdkThinkingLevel = "xhigh";
+
+/** Thinking levels accepted from parent pi sessions. */
+export type ThinkingLevel = SdkThinkingLevel | "max";
+
+/** Map host-only levels to the highest level supported by the local SDK boundary. */
+export function resolveImpThinkingLevel(level: ThinkingLevel): SdkThinkingLevel {
+  return level === "max" ? MAX_COMPAT_THINKING_LEVEL : (level as SdkThinkingLevel);
+}
+
 const FINAL_TURN_DIRECTIVE =
   "FINAL TURN. Do not start new work. Save any pending changes, commit your progress, and respond with: (1) what you completed, (2) what remains unfinished.";
 
@@ -23,6 +39,7 @@ export interface SpawnImpSessionOptions {
   config: AgentConfig | undefined; // undefined = ephemeral
   cwd: string;
   parentModel: Model<Api>;
+  parentThinkingLevel: ThinkingLevel;
   modelRegistry: ModelRegistry;
   signal: AbortSignal;
   settings: ImpSettings;
@@ -47,6 +64,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     config,
     cwd,
     parentModel,
+    parentThinkingLevel,
     modelRegistry,
     signal,
     settings,
@@ -97,6 +115,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   const { session } = await createAgentSession({
     cwd,
     model,
+    thinkingLevel: resolveImpThinkingLevel(parentThinkingLevel),
     tools: toolAllowlist,
     sessionManager: SessionManager.inMemory(),
     settingsManager: createImpSettingsManager(cwd),

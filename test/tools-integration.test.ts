@@ -114,6 +114,21 @@ describe("summon → wait integration", () => {
     expect(json[0].error).toBe("session crashed");
   });
 
+  it("maps inherited max thinking to the local SDK's highest supported level", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+    installMock({ totalTurns: 1 });
+
+    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings(), () => "max");
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+    await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+
+    expect(vi.mocked(createAgentSession)).toHaveBeenCalledWith(expect.objectContaining({ thinkingLevel: "xhigh" }));
+  });
+
   it("provider failure via auto_retry_end event yields status=failed", async () => {
     const imps = new Map();
     const namePool = makeNamePool();
