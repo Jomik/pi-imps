@@ -58,6 +58,31 @@ export function formatSummonDisplay(name: string, agent: string | undefined, the
   return `${theme.fg("accent", name)} the ${theme.fg("muted", agent)} has answered your summons!`;
 }
 
+const TASK_PREVIEW_LENGTH = 60;
+
+/**
+ * Format the task preview block beneath the summon header.
+ *
+ * Collapsed: one-line truncated preview with an expand hint.
+ * Expanded:  full task text with a collapse hint.
+ */
+export function formatSummonTaskPreview(
+  task: string,
+  expanded: boolean,
+  theme: Theme,
+  expandHint = "expand",
+  collapseHint = "collapse",
+): string {
+  const hint = theme.fg("muted", expanded ? collapseHint : expandHint);
+  if (expanded) {
+    return `  ${theme.fg("dim", "task:")}\n  ${task}\n  ${hint}`;
+  }
+  const compactTask = task.trim().replace(/\s+/g, " ");
+  const preview =
+    compactTask.length > TASK_PREVIEW_LENGTH ? `${compactTask.slice(0, TASK_PREVIEW_LENGTH)}\u2026` : compactTask;
+  return `  ${theme.fg("dim", `"${preview}"`)}  ${hint}`;
+}
+
 /**
  * Format compact wait result for TUI display (themed).
  */

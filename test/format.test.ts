@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildAgentsBlock } from "../src/agents.js";
-import { formatSummonDisplay, formatWaitDisplay } from "../src/display.js";
+import { formatSummonDisplay, formatSummonTaskPreview, formatWaitDisplay } from "../src/display.js";
 import type { AgentConfig, Imp } from "../src/types.js";
 
 function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
@@ -63,6 +63,56 @@ describe("buildAgentsBlock", () => {
   it("includes model in description when present", () => {
     const result = buildAgentsBlock([makeAgent({ name: "fast", description: "Quick agent", model: "gpt-5" })]);
     expect(result).toContain("[model: gpt-5]");
+  });
+});
+
+describe("formatSummonTaskPreview", () => {
+  it("collapsed: shows task text with expand hint", () => {
+    const task = "Write a function to parse JSON";
+    const s = formatSummonTaskPreview(task, false, theme);
+    expect(s).toContain(task);
+    expect(s).toContain("expand");
+    expect(s).not.toContain("collapse");
+  });
+
+  it("collapsed: truncates long task with ellipsis", () => {
+    const task = "a".repeat(80);
+    const s = formatSummonTaskPreview(task, false, theme);
+    expect(s).toContain("\u2026");
+    expect(s).toContain("expand");
+    // Should not contain the full string (truncated)
+    expect(s).not.toContain(task);
+  });
+
+  it("collapsed: task exactly at limit is not truncated", () => {
+    const task = "a".repeat(60);
+    const s = formatSummonTaskPreview(task, false, theme);
+    expect(s).not.toContain("\u2026");
+    expect(s).toContain(task);
+  });
+
+  it("collapsed: normalizes multiline task text into one line", () => {
+    const s = formatSummonTaskPreview("Review\n  the\tcode", false, theme);
+    expect(s).toContain("Review the code");
+    expect(s).not.toContain("Review\n");
+  });
+
+  it("supports custom expand and collapse hints", () => {
+    expect(formatSummonTaskPreview("do it", false, theme, "open", "close")).toContain("open");
+    expect(formatSummonTaskPreview("do it", true, theme, "open", "close")).toContain("close");
+  });
+
+  it("expanded: shows full task text with collapse hint", () => {
+    const task = "a".repeat(80);
+    const s = formatSummonTaskPreview(task, true, theme);
+    expect(s).toContain(task);
+    expect(s).toContain("collapse");
+    expect(s).not.toContain("expand");
+  });
+
+  it("expanded: shows task: label", () => {
+    const s = formatSummonTaskPreview("do something", true, theme);
+    expect(s).toContain("task:");
   });
 });
 

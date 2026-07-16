@@ -1,7 +1,12 @@
-import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  AgentToolUpdateCallback,
+  ExtensionContext,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { dismissTool, listImpsTool, waitTool } from "../src/tools.js";
-import type { Imp } from "../src/types.js";
+import { dismissTool, listImpsTool, summonTool, waitTool } from "../src/tools.js";
+import type { Imp, ImpSettings } from "../src/types.js";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -30,11 +35,62 @@ function buildMap(...imps: Imp[]): Map<string, Imp> {
 
 const nullCtx = {} as ExtensionContext;
 
+const theme = {
+  fg: (_color: string, text: string) => text,
+} as unknown as Theme;
+
+function makeSettings(): ImpSettings {
+  return { turnLimit: 30, toolAllowlist: undefined, additionalExtensions: [], agents: {} };
+}
+
 function parseResult(result: AgentToolResult<unknown>) {
   const item = result.content[0];
   if (item.type !== "text") throw new Error("expected text content");
   return JSON.parse(item.text);
 }
+
+// ─── summon ─────────────────────────────────────────────────────────────────
+
+describe("summonTool renderResult", () => {
+  it("renders collapsed task preview from details.task", () => {
+    const tool = summonTool(new Map(), [], { allocate: () => "imp-1", release: () => {} }, makeSettings());
+    const component = tool.renderResult?.(
+      {
+        content: [{ type: "text", text: JSON.stringify({ name: "imp-1" }) }],
+        details: { name: "imp-1", agent: undefined, task: "Review\n  the code" },
+      },
+      { expanded: false, isPartial: false },
+      theme,
+      { lastComponent: undefined } as unknown as Parameters<NonNullable<typeof tool.renderResult>>[3],
+    );
+
+    const rendered = component?.render(120).join("\n") ?? "";
+    expect(rendered).toContain("imp-1 has answered your summons!");
+    expect(rendered).toContain("Review the code");
+    expect(rendered).toContain("expand");
+    expect(rendered).not.toContain("Review\n");
+  });
+
+  it("renders expanded task preview", () => {
+    const tool = summonTool(new Map(), [], { allocate: () => "imp-1", release: () => {} }, makeSettings());
+    const component = tool.renderResult?.(
+      {
+        content: [{ type: "text", text: JSON.stringify({ name: "imp-1" }) }],
+        details: { name: "imp-1", agent: "mason", task: "Review\n  the code" },
+      },
+      { expanded: true, isPartial: false },
+      theme,
+      { lastComponent: undefined } as unknown as Parameters<NonNullable<typeof tool.renderResult>>[3],
+    );
+
+    const rendered = component?.render(120).join("\n") ?? "";
+    expect(rendered).toContain("imp-1 the mason has answered your summons!");
+    expect(rendered).toContain("task:");
+    expect(rendered).toContain("Review");
+    expect(rendered).toContain("the code");
+    expect(rendered).toContain("collapse");
+  });
+});
 
 // ─── wait ───────────────────────────────────────────────────────────────────
 

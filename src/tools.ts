@@ -7,7 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { formatImpStatusDisplay, formatSummonDisplay, formatWaitDisplay } from "./display.js";
+import { formatImpStatusDisplay, formatSummonDisplay, formatSummonTaskPreview, formatWaitDisplay } from "./display.js";
 import { spawnImpSession } from "./session.js";
 import { allImps, findImp, uncollectedImps } from "./state.js";
 import type { AgentConfig, Imp, ImpSettings, ImpSnapshot } from "./types.js";
@@ -49,6 +49,7 @@ const SummonParams = Type.Object({
 interface SummonDetails {
   name: string;
   agent: string | undefined;
+  task: string;
 }
 
 export function summonTool(
@@ -206,14 +207,20 @@ export function summonTool(
             text: JSON.stringify({ name, agent }),
           },
         ],
-        details: { name, agent },
+        details: { name, agent, task: params.task },
       };
     },
-    renderResult(result, _options, theme: Theme, context) {
+    renderResult(result, options, theme: Theme, context) {
       const details = result.details as SummonDetails | undefined;
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       if (details) {
-        text.setText(formatSummonDisplay(details.name, details.agent, theme));
+        const header = formatSummonDisplay(details.name, details.agent, theme);
+        if (details.task) {
+          const preview = formatSummonTaskPreview(details.task, options.expanded, theme);
+          text.setText(`${header}\n${preview}`);
+        } else {
+          text.setText(header);
+        }
       } else {
         // Fallback (error cases)
         const msg = result.content[0];
