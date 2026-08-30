@@ -38,12 +38,12 @@ function makePi(toolNames: string[]) {
  * Returns the typed ctx alongside separate notify/custom handles so test
  * assertions can use the full MockInstance API.
  */
-function makeCtx(cwd: string, overrides?: Partial<{ hasUI: boolean }>) {
+function makeCtx(cwd: string, overrides?: Partial<{ mode: "tui" | "rpc" | "print" }>) {
   const notify = vi.fn();
   const custom = vi.fn().mockResolvedValue(undefined);
   const ctx = {
     cwd,
-    hasUI: overrides?.hasUI ?? true,
+    mode: overrides?.mode ?? "tui",
     ui: { notify, custom },
   } as unknown as ExtensionCommandContext;
   return { ctx, notify, custom };
@@ -225,11 +225,52 @@ describe("handler argument validation", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Unknown agent"), "warning");
   });
 
-  it("shows a warning when TUI is unavailable", async () => {
+  it("shows a warning when TUI is unavailable (rpc mode)", async () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, notify } = makeCtx(tmpDir, { hasUI: false });
+    const { ctx, notify } = makeCtx(tmpDir, { mode: "rpc" });
     await cmd.handler("tools mason", ctx);
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("TUI"), "warning");
+  });
+
+  it("shows a warning when TUI is unavailable (print mode)", async () => {
+    const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
+    const { ctx, notify } = makeCtx(tmpDir, { mode: "print" });
+    await cmd.handler("tools mason", ctx);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("TUI"), "warning");
+  });
+
+  it("shows usage info for extra arguments after agent name", async () => {
+    const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
+    const { ctx, notify } = makeCtx(tmpDir);
+    await cmd.handler("tools mason extra", ctx);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Usage"), "info");
+  });
+
+  it("shows an error and does not open TUI when project config has non-object root", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify([1, 2, 3]));
+    const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
+    const { ctx, notify, custom } = makeCtx(tmpDir);
+    await cmd.handler("tools mason", ctx);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Cannot read project config"), "error");
+    expect(custom).not.toHaveBeenCalled();
+  });
+
+  it("shows an error and does not open TUI when project config has non-object agents", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: "bad" }));
+    const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
+    const { ctx, notify, custom } = makeCtx(tmpDir);
+    await cmd.handler("tools mason", ctx);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Cannot read project config"), "error");
+    expect(custom).not.toHaveBeenCalled();
+  });
+
+  it("shows an error and does not open TUI when selected agent entry is not an object", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: "bad" } }));
+    const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
+    const { ctx, notify, custom } = makeCtx(tmpDir);
+    await cmd.handler("tools mason", ctx);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Cannot read project config"), "error");
+    expect(custom).not.toHaveBeenCalled();
   });
 
   it("shows an error and does not open TUI when project config is malformed", async () => {

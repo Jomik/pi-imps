@@ -1,7 +1,15 @@
-import { getSettingsListTheme, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionCommandContext, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
 import { loadProjectConfig, updateProjectAgentTools } from "./settings.js";
 import type { AgentConfig, ImpSettings } from "./types.js";
+
+// Extend ExtensionContext with the mode discriminator available in pi-coding-agent >= 0.75.
+declare module "@earendil-works/pi-coding-agent" {
+  interface ExtensionContext {
+    /** Execution mode — "tui" in interactive mode, "rpc" or "print" otherwise. */
+    mode?: "tui" | "rpc" | "print";
+  }
+}
 
 const USAGE = "/imps tools <agent-name>";
 
@@ -114,13 +122,18 @@ export function createImpsCommand(
         return;
       }
 
+      if (parts.length > 2) {
+        ctx.ui.notify(`Usage: ${USAGE}`, "info");
+        return;
+      }
+
       const agent = agents.find((a) => a.name === agentName);
       if (!agent) {
         ctx.ui.notify(`Unknown agent: "${agentName}". Usage: ${USAGE}`, "warning");
         return;
       }
 
-      if (!ctx.hasUI) {
+      if (ctx.mode !== "tui") {
         ctx.ui.notify("/imps tools requires the interactive TUI (not available in print/RPC mode)", "warning");
         return;
       }

@@ -231,6 +231,21 @@ describe("loadProjectConfig", () => {
     // tools: "run_tests" (string) should be rejected; entry becomes {}
     expect(config.agents?.mason).toEqual({});
   });
+
+  it("throws on non-object root", () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify([1, 2, 3]));
+    expect(() => loadProjectConfig(tmpDir)).toThrow();
+  });
+
+  it("throws on non-object agents field", () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: "bad" }));
+    expect(() => loadProjectConfig(tmpDir)).toThrow();
+  });
+
+  it("throws on non-object agent entry", () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: "bad" } }));
+    expect(() => loadProjectConfig(tmpDir)).toThrow();
+  });
 });
 
 // ─── updateProjectAgentTools ─────────────────────────────────────────────────
