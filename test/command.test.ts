@@ -35,17 +35,31 @@ function makePi(toolNames: string[]) {
 
 /**
  * Create a minimal ExtensionCommandContext mock.
+ *
+ * Pass `{ mode: ... }` for newer pi (>= 0.75) — mode is set on the context.
+ * Pass `{ hasUI: ... }` for legacy pi 0.74 — no mode property is set.
+ * Omit overrides for the default (newer tui).
+ *
  * Returns the typed ctx alongside separate notify/custom handles so test
  * assertions can use the full MockInstance API.
  */
-function makeCtx(cwd: string, overrides?: Partial<{ mode: "tui" | "rpc" | "print" }>) {
+function makeCtx(cwd: string, overrides?: { mode: "tui" | "rpc" | "print" } | { hasUI: boolean }) {
   const notify = vi.fn();
   const custom = vi.fn().mockResolvedValue(undefined);
-  const ctx = {
-    cwd,
-    mode: overrides?.mode ?? "tui",
-    ui: { notify, custom },
-  } as unknown as ExtensionCommandContext;
+
+  const base: Record<string, unknown> = { cwd, ui: { notify, custom } };
+
+  if (overrides !== undefined && "hasUI" in overrides) {
+    // Legacy pi 0.74: no mode property — guard falls back to hasUI.
+    base.hasUI = overrides.hasUI;
+  } else {
+    // Newer pi (>= 0.75): context carries a mode discriminator.
+    const mode = overrides?.mode ?? "tui";
+    base.mode = mode;
+    base.hasUI = mode === "tui";
+  }
+
+  const ctx = base as unknown as ExtensionCommandContext;
   return { ctx, notify, custom };
 }
 
@@ -237,6 +251,20 @@ describe("handler argument validation", () => {
     const { ctx, notify } = makeCtx(tmpDir, { mode: "print" });
     await cmd.handler("tools mason", ctx);
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("TUI"), "warning");
+  });
+
+  it("shows a warning when TUI is unavailable (legacy hasUI=false)", async () => {
+    const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
+    const { ctx, notify } = makeCtx(tmpDir, { hasUI: false });
+    await cmd.handler("tools mason", ctx);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("TUI"), "warning");
+  });
+
+  it("opens the TUI on legacy pi 0.74 when hasUI=true", async () => {
+    const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
+    const { ctx, custom } = makeCtx(tmpDir, { hasUI: true });
+    await cmd.handler("tools mason", ctx);
+    expect(custom).toHaveBeenCalledOnce();
   });
 
   it("shows usage info for extra arguments after agent name", async () => {

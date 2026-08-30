@@ -3,14 +3,6 @@ import { Container, type SettingItem, SettingsList, Text } from "@earendil-works
 import { loadProjectConfig, updateProjectAgentTools } from "./settings.js";
 import type { AgentConfig, ImpSettings } from "./types.js";
 
-// Extend ExtensionContext with the mode discriminator available in pi-coding-agent >= 0.75.
-declare module "@earendil-works/pi-coding-agent" {
-  interface ExtensionContext {
-    /** Execution mode — "tui" in interactive mode, "rpc" or "print" otherwise. */
-    mode?: "tui" | "rpc" | "print";
-  }
-}
-
 const USAGE = "/imps tools <agent-name>";
 
 /**
@@ -79,11 +71,7 @@ export function applyToolToggle(
  * the TUI.  When the interactive UI is unavailable (print / RPC mode) the
  * command reports that the TUI is required.
  */
-export function createImpsCommand(
-  pi: ExtensionAPI,
-  agents: AgentConfig[],
-  settings: ImpSettings,
-) {
+export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], settings: ImpSettings) {
   return {
     description: "Manage project tool grants for imp agents",
 
@@ -133,7 +121,10 @@ export function createImpsCommand(
         return;
       }
 
-      if (ctx.mode !== "tui") {
+      // `mode` was added in pi-coding-agent 0.75; fall back to `hasUI` on 0.74.
+      const mode = (ctx as { mode?: string }).mode;
+      const tuiUnavailable = mode !== undefined ? mode !== "tui" : !ctx.hasUI;
+      if (tuiUnavailable) {
         ctx.ui.notify("/imps tools requires the interactive TUI (not available in print/RPC mode)", "warning");
         return;
       }
@@ -150,7 +141,10 @@ export function createImpsCommand(
 
       const globalTools = new Set<string>(settings.agents[agentName]?.tools ?? []);
       const existingProjectToolNames = projectConfig.agents?.[agentName]?.tools ?? [];
-      const allToolNames = pi.getAllTools().map((t) => t.name).sort();
+      const allToolNames = pi
+        .getAllTools()
+        .map((t) => t.name)
+        .sort();
 
       // Tools in the project config that are not currently registered — preserve
       // them on every write so they are not silently dropped.
