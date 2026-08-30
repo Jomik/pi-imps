@@ -152,7 +152,7 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
 | `turnLimit` | number | 30 | Max turns per imp (minimum 2) |
 | `toolAllowlist` | string[] | all tools | Default tool allowlist for all imps. Overridden by agent frontmatter `tools`. |
 | `additionalExtensions` | string[] | none | Extensions that always load on imp sessions regardless of tool filtering |
-| `agents` | object | none | Per-agent additive tool grants. Keys are agent names. Tools are unioned with the agent's frontmatter. |
+| `agents` | object | none | Per-agent additive tool grants. Keys are agent names. Tools are unioned with the effective base allowlist: agent frontmatter `tools` when present, otherwise global `toolAllowlist`. |
 
 ### Project config
 
