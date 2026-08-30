@@ -86,6 +86,29 @@ Some extensions should always load on imp sessions regardless of the tool allowl
 
 Agent frontmatter cannot override additional extensions.
 
+### Commands
+
+#### `/imps tools <agent-name>`
+
+Open an interactive TUI to manage per-project additive tool grants for a named agent.
+
+```
+/imps tools mason
+```
+
+The agent name autocompletes from discovered agents. Unknown subcommands or agent names show concise usage guidance.
+
+The tool list shows every tool currently registered in the session, sorted alphabetically:
+
+- **`global`** — tool is granted via global `~/.pi/agent/imps.json` settings (read-only in this UI).
+- **`yes` / `no`** — toggle project-level grant in `.pi/imps.json` for the named agent.
+
+Each toggle is persisted immediately and affects subsequently summoned imps. Tools already present in `.pi/imps.json` that are not currently registered in the session are preserved on every write.
+
+> **Project grants are additive.** Removing a project grant cannot revoke access provided by the agent's frontmatter `tools` or global settings. The TUI only edits `.pi/imps.json`.
+
+Requires interactive mode (TUI). Not available in print or RPC mode.
+
 ### Turn limit
 
 A safety net to prevent runaway imps. Default: **30 turns**. The imp works normally until its final turn, when it receives a directive to wrap up. After that turn, the session ends with a `truncated` status so the LLM knows the imp was cut off.
