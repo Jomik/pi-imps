@@ -25,7 +25,7 @@ Summon an imp. Returns immediately with a generated name. Non-blocking — the i
 ```
 summon({
   task: string,           // what the imp should do
-  agent?: string,         // named agent, or ephemeral
+  agent: string,          // named agent to use
 }) → { name: string }
 ```
 
@@ -87,7 +87,7 @@ Running imp count in the status line. Minimal — just the count.
 
 ### Imp Sessions
 
-Ephemeral, in-memory, no persistence. Ephemeral imps inherit the parent's model; named agents use their frontmatter model.
+In-memory, no persistence. Named agents use their frontmatter model when configured; otherwise they inherit the parent's model.
 
 ### Tools
 
@@ -100,10 +100,9 @@ Configurable at three levels:
 Resolution at summon time:
 
 1. Determine the **base allowlist**:
-   - Named agent with `tools` in frontmatter → use frontmatter tools
-   - Named agent without `tools` → use settings `toolAllowlist` (or undefined = all tools)
-   - Ephemeral imp → use settings `toolAllowlist` (or undefined = all tools)
-2. Compute **additive tools**: union of `agents.<key>.tools` from global `imps.json` and project `.pi/imps.json`, where `<key>` is the agent name (or `"_"` for ephemeral imps)
+   - Agent with `tools` in frontmatter → use frontmatter tools
+   - Agent without `tools` → use settings `toolAllowlist` (or undefined = all tools)
+2. Compute **additive tools**: union of `agents.<key>.tools` from global `imps.json` and project `.pi/imps.json`, where `<key>` is the agent name
 3. Merge: if base is undefined (all tools), result is undefined (all tools) — additive tools are redundant since all tools are already available. If base is defined, result is `base ∪ additive`.
 4. Filter extensions: exclude any that provide no tools in the final allowlist
 
@@ -128,15 +127,15 @@ Project config lives at `.pi/imps.json` (project root). Both project and global 
 
 This allows projects to grant agents access to project-specific tools (e.g. armory tools like `run_tests`) without modifying global agent definitions.
 
-For ephemeral (unnamed) imps, use the key `"_"`:
+#### Project tool grants UI
 
-```json
-{
-  "agents": {
-    "_": { "tools": ["run_tests"] }
-  }
-}
-```
+The `/imps tools <imp-name>` TUI command provides a simpler way to manage project-level additive tool grants. The imp-name argument offers completion from discovered agents. Missing or unknown names produce usage guidance rather than opening another selection step.
+
+The picker lists every tool currently registered in the parent pi session. It does not classify tools by registration source or depend on pi-armory configuration details; globally and project-registered tools appear together. Tools already granted to the selected imp by global pi-imps settings are shown as read-only global grants. Other toggle states represent only whether a tool is granted by the project config, not whether the agent may also receive it from its frontmatter baseline. The UI states that project grants are additive: removing a project grant cannot remove access provided by another scope, and project grants have no effect when the agent's base already allows all tools.
+
+Each project-grant change is persisted to the project config and affects subsequently summoned imps. Existing settings for other agents and unrecognized tool names are preserved. If the existing config cannot be read or parsed, the command reports the error and does not overwrite it.
+
+The first version does not edit global settings or agent frontmatter, show complete effective merged permissions, identify pi-armory tool provenance, provide bulk grants, or add persistent UI.
 
 
 ### Turn Limit
