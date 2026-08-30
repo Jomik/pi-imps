@@ -205,6 +205,11 @@ describe("loadProjectConfig", () => {
     expect(config).toEqual({});
   });
 
+  it("throws when .pi/imps.json is a directory (EISDIR)", () => {
+    mkdirSync(join(piDir, "imps.json"), { recursive: true });
+    expect(() => loadProjectConfig(tmpDir)).toThrow();
+  });
+
   it("returns empty config when .pi directory does not exist", () => {
     rmSync(piDir, { recursive: true, force: true });
     const config = loadProjectConfig(tmpDir);

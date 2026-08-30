@@ -274,6 +274,15 @@ describe("handler argument validation", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Usage"), "info");
   });
 
+  it("shows an error and does not open TUI when .pi/imps.json is a directory (EISDIR)", async () => {
+    mkdirSync(join(piDir, "imps.json"), { recursive: true });
+    const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
+    const { ctx, notify, custom } = makeCtx(tmpDir);
+    await cmd.handler("tools mason", ctx);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Cannot read project config"), "error");
+    expect(custom).not.toHaveBeenCalled();
+  });
+
   it("shows an error and does not open TUI when project config has non-object root", async () => {
     writeFileSync(join(piDir, "imps.json"), JSON.stringify([1, 2, 3]));
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());

@@ -122,7 +122,7 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
       }
 
       // `mode` was added in pi-coding-agent 0.75; fall back to `hasUI` on 0.74.
-      const mode = (ctx as { mode?: string }).mode;
+      const mode = "mode" in ctx ? (ctx as { mode: string }).mode : undefined;
       const tuiUnavailable = mode !== undefined ? mode !== "tui" : !ctx.hasUI;
       if (tuiUnavailable) {
         ctx.ui.notify("/imps tools requires the interactive TUI (not available in print/RPC mode)", "warning");
@@ -175,7 +175,7 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
         );
 
         const header = new Text(
-          `Project tool grants for agent: ${agentName}\nProject grants are additive — removing a project grant cannot remove access provided by frontmatter or global settings.\n`,
+          `Project tool grants for agent: ${agentName}\nProject grants are additive — removing a project grant cannot remove access provided by frontmatter or global settings. Grants have no effect when the agent's base already allows all tools (no frontmatter tools and no global toolAllowlist).\n`,
         );
 
         const container = new Container();

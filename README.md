@@ -105,7 +105,7 @@ The tool list shows every tool currently registered in the session, sorted alpha
 
 Each toggle is persisted immediately and affects subsequently summoned imps. Tools already present in `.pi/imps.json` that are not currently registered in the session are preserved on every write.
 
-> **Project grants are additive.** Removing a project grant cannot revoke access provided by the agent's frontmatter `tools` or global settings. The TUI only edits `.pi/imps.json`.
+> **Project grants are additive.** Removing a project grant cannot revoke access provided by the agent's frontmatter `tools` or global settings. The TUI only edits `.pi/imps.json`. Project grants also have no effect when the agent's base already allows all tools (no frontmatter `tools` and no global `toolAllowlist`).
 
 Requires interactive mode (TUI). Not available in print or RPC mode.
 

@@ -91,8 +91,8 @@ function validateProjectConfigShape(raw: unknown): asserts raw is Record<string,
 
 /**
  * Load project-level imp config from <cwd>/.pi/imps.json.
- * Returns empty config if the file doesn't exist.
- * Throws on invalid JSON, read errors (permissions, etc.), or shape-invalid config
+ * Returns empty config if the file doesn't exist (ENOENT/ENOTDIR).
+ * Throws on invalid JSON, read errors (permissions, EISDIR, etc.), or shape-invalid config
  * (non-object root, non-object `agents`, or non-object agent entries).
  */
 export function loadProjectConfig(cwd: string): ProjectImpConfig {
@@ -103,7 +103,7 @@ export function loadProjectConfig(cwd: string): ProjectImpConfig {
   } catch (err: unknown) {
     if (err instanceof Error && "code" in err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR") return {};
+      if (code === "ENOENT" || code === "ENOTDIR") return {};
     }
     throw err;
   }
@@ -159,6 +159,11 @@ export function updateProjectAgentTools(cwd: string, agentName: string, tools: s
     agents: { ...agents, [agentName]: updatedEntry },
   };
 
+  // ponytail: Deliberate single-process read-modify-write. Concurrent parent
+  // sessions that write to the same project config can race. Upgrade path:
+  // wrap this block with a proper file lock (e.g. proper-lockfile) around the
+  // read-modify-write cycle if multi-session writes become necessary.
+  //
   // Atomic write: create .pi dir if needed, write to tmp, rename into place.
   mkdirSync(piDir, { recursive: true });
   const tmpPath = `${configPath}.tmp`;
