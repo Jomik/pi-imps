@@ -79,6 +79,9 @@ const plainTheme: SettingsListTheme = {
   hint: (text) => text,
 };
 
+/** Minimal no-op onPersist callback indicating success. */
+const persistOk = (): true => true;
+
 // ─── partitionTools ──────────────────────────────────────────────────────────
 
 describe("partitionTools", () => {
@@ -212,32 +215,14 @@ describe("computeRevokeResult", () => {
 
 describe("TwoPaneToolPicker render", () => {
   it("renders both Granted and Available column headers", () => {
-    const picker = new TwoPaneToolPicker(
-      ["a", "b"],
-      new Set(),
-      new Set(),
-      [],
-      plainTheme,
-      10,
-      () => {},
-      () => {},
-    );
+    const picker = new TwoPaneToolPicker(["a", "b"], new Set(), new Set(), [], plainTheme, 10, persistOk, () => {});
     const lines = picker.render(60);
     expect(lines[0]).toContain("Granted");
     expect(lines[0]).toContain("Available");
   });
 
   it("marks Available as active by default when available is non-empty", () => {
-    const picker = new TwoPaneToolPicker(
-      ["a"],
-      new Set(),
-      new Set(),
-      [],
-      plainTheme,
-      10,
-      () => {},
-      () => {},
-    );
+    const picker = new TwoPaneToolPicker(["a"], new Set(), new Set(), [], plainTheme, 10, persistOk, () => {});
     const lines = picker.render(60);
     expect(lines[0]).toContain("▶ Available");
     expect(lines[0]).not.toContain("▶ Granted");
@@ -245,16 +230,7 @@ describe("TwoPaneToolPicker render", () => {
 
   it("marks Granted as active by default when available is empty", () => {
     // All tools are globally granted → available is empty
-    const picker = new TwoPaneToolPicker(
-      ["a"],
-      new Set(["a"]),
-      new Set(),
-      [],
-      plainTheme,
-      10,
-      () => {},
-      () => {},
-    );
+    const picker = new TwoPaneToolPicker(["a"], new Set(["a"]), new Set(), [], plainTheme, 10, persistOk, () => {});
     const lines = picker.render(60);
     expect(lines[0]).toContain("▶ Granted");
     expect(lines[0]).not.toContain("▶ Available");
@@ -268,7 +244,7 @@ describe("TwoPaneToolPicker render", () => {
       [],
       plainTheme,
       10,
-      () => {},
+      persistOk,
       () => {},
     );
     const width = 60;
@@ -286,7 +262,7 @@ describe("TwoPaneToolPicker render", () => {
       [],
       plainTheme,
       10,
-      () => {},
+      persistOk,
       () => {},
     );
     const width = 20;
@@ -305,7 +281,7 @@ describe("TwoPaneToolPicker render", () => {
       [],
       plainTheme,
       10,
-      () => {},
+      persistOk,
       () => {},
     );
     for (const width of [15, 30, 60, 80, 120]) {
@@ -321,16 +297,7 @@ describe("TwoPaneToolPicker render", () => {
 
 describe("TwoPaneToolPicker input", () => {
   it("Tab switches active column from Available to Granted", () => {
-    const picker = new TwoPaneToolPicker(
-      ["a"],
-      new Set(),
-      new Set(),
-      [],
-      plainTheme,
-      5,
-      () => {},
-      () => {},
-    );
+    const picker = new TwoPaneToolPicker(["a"], new Set(), new Set(), [], plainTheme, 5, persistOk, () => {});
     // Available is active by default (non-empty)
     expect(picker.render(60)[0]).toContain("▶ Available");
     picker.handleInput("\t");
@@ -338,16 +305,7 @@ describe("TwoPaneToolPicker input", () => {
   });
 
   it("Tab switches active column from Granted back to Available", () => {
-    const picker = new TwoPaneToolPicker(
-      ["a"],
-      new Set(),
-      new Set(),
-      [],
-      plainTheme,
-      5,
-      () => {},
-      () => {},
-    );
+    const picker = new TwoPaneToolPicker(["a"], new Set(), new Set(), [], plainTheme, 5, persistOk, () => {});
     picker.handleInput("\t"); // → Granted
     picker.handleInput("\t"); // → Available again
     expect(picker.render(60)[0]).toContain("▶ Available");
@@ -361,7 +319,7 @@ describe("TwoPaneToolPicker input", () => {
       [],
       plainTheme,
       5,
-      () => {},
+      persistOk,
       () => {},
     );
     expect(picker.render(60)[0]).toContain("▶ Granted");
@@ -370,32 +328,14 @@ describe("TwoPaneToolPicker input", () => {
   });
 
   it("left arrow switches to Granted column", () => {
-    const picker = new TwoPaneToolPicker(
-      ["a"],
-      new Set(),
-      new Set(),
-      [],
-      plainTheme,
-      5,
-      () => {},
-      () => {},
-    );
+    const picker = new TwoPaneToolPicker(["a"], new Set(), new Set(), [], plainTheme, 5, persistOk, () => {});
     // Available is active by default
     picker.handleInput("\x1b[D"); // left arrow
     expect(picker.render(60)[0]).toContain("▶ Granted");
   });
 
   it("alternate left/right arrow sequences (\\x1bOC/D) also switch columns", () => {
-    const picker = new TwoPaneToolPicker(
-      ["a"],
-      new Set(),
-      new Set(),
-      [],
-      plainTheme,
-      5,
-      () => {},
-      () => {},
-    );
+    const picker = new TwoPaneToolPicker(["a"], new Set(), new Set(), [], plainTheme, 5, persistOk, () => {});
     picker.handleInput("\x1bOD"); // alternate left
     expect(picker.render(60)[0]).toContain("▶ Granted");
     picker.handleInput("\x1bOC"); // alternate right
@@ -412,7 +352,10 @@ describe("TwoPaneToolPicker input", () => {
       [],
       plainTheme,
       5,
-      (tools) => persisted.push([...tools]),
+      (tools) => {
+        persisted.push([...tools]);
+        return true;
+      },
       () => {},
     );
     // Available is active by default
@@ -432,7 +375,10 @@ describe("TwoPaneToolPicker input", () => {
       ["future-tool"], // unknown preserved
       plainTheme,
       5,
-      (tools) => persisted.push([...tools]),
+      (tools) => {
+        persisted.push([...tools]);
+        return true;
+      },
       () => {},
     );
     picker.handleInput("\r");
@@ -450,7 +396,10 @@ describe("TwoPaneToolPicker input", () => {
       [],
       plainTheme,
       5,
-      (tools) => persisted.push([...tools]),
+      (tools) => {
+        persisted.push([...tools]);
+        return true;
+      },
       () => {},
     );
     // Switch to Granted (Available is active by default because tool-b is there)
@@ -470,7 +419,10 @@ describe("TwoPaneToolPicker input", () => {
       [],
       plainTheme,
       5,
-      (tools) => persisted.push([...tools]),
+      (tools) => {
+        persisted.push([...tools]);
+        return true;
+      },
       () => {},
     );
     // Switch to Granted (tool-b in Available, Available is active by default)
@@ -480,20 +432,48 @@ describe("TwoPaneToolPicker input", () => {
     expect(persisted).toHaveLength(0);
   });
 
-  it("Escape calls onDone via the active list", () => {
-    let closed = false;
+  it("grant persistence false leaves tool in Available and project set unchanged", () => {
+    const projectTools = new Set<string>();
     const picker = new TwoPaneToolPicker(
       ["tool-a"],
       new Set(),
-      new Set(),
+      projectTools,
       [],
       plainTheme,
       5,
+      (_tools) => false, // simulate persistence failure
       () => {},
-      () => {
-        closed = true;
-      },
     );
+    // Available is active by default
+    picker.handleInput("\r"); // Enter — attempt to grant tool-a
+    expect(projectTools.has("tool-a")).toBe(false); // in-memory set unchanged
+    expect(picker.render(60)[0]).toContain("▶ Available"); // column state unchanged
+  });
+
+  it("revoke persistence false leaves tool in Granted and project set unchanged", () => {
+    const projectTools = new Set(["tool-a"]);
+    const picker = new TwoPaneToolPicker(
+      ["tool-a", "tool-b"],
+      new Set(),
+      projectTools,
+      [],
+      plainTheme,
+      5,
+      (_tools) => false, // simulate persistence failure
+      () => {},
+    );
+    // Switch to Granted (Available is default because tool-b is there)
+    picker.handleInput("\t");
+    picker.handleInput("\r"); // Enter — attempt to revoke tool-a
+    expect(projectTools.has("tool-a")).toBe(true); // in-memory set unchanged
+    expect(picker.render(60)[0]).toContain("▶ Granted"); // column state unchanged
+  });
+
+  it("Escape calls onDone via the active list", () => {
+    let closed = false;
+    const picker = new TwoPaneToolPicker(["tool-a"], new Set(), new Set(), [], plainTheme, 5, persistOk, () => {
+      closed = true;
+    });
     picker.handleInput("\x1b"); // Escape
     expect(closed).toBe(true);
   });
@@ -507,7 +487,7 @@ describe("TwoPaneToolPicker input", () => {
       [],
       plainTheme,
       5,
-      () => {},
+      persistOk,
       () => {
         closed = true;
       },

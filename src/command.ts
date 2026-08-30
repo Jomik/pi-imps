@@ -106,7 +106,7 @@ export class TwoPaneToolPicker {
     private readonly unknownProjectTools: readonly string[],
     private readonly theme: SettingsListTheme,
     private readonly maxVisible: number,
-    private readonly onPersist: (tools: string[]) => void,
+    private readonly onPersist: (tools: string[]) => boolean,
     private readonly onDone: () => void,
   ) {
     const { granted, available } = partitionTools(visibleToolNames, globalTools, currentProjectTools);
@@ -122,9 +122,15 @@ export class TwoPaneToolPicker {
       this.maxVisible,
       this.theme,
       (id, _newValue) => {
-        if (this.globalTools.has(id)) return; // globally granted — read-only
+        const toolsToWrite = computeRevokeResult(
+          id,
+          this.globalTools,
+          this.currentProjectTools,
+          this.unknownProjectTools,
+        );
+        if (toolsToWrite === null) return; // globally granted — read-only
+        if (this.onPersist(toolsToWrite) === false) return;
         this.currentProjectTools.delete(id);
-        this.onPersist([...this.currentProjectTools, ...this.unknownProjectTools]);
         this.rebuildLists();
       },
       () => this.onDone(),
@@ -139,8 +145,9 @@ export class TwoPaneToolPicker {
       this.maxVisible,
       this.theme,
       (id, _newValue) => {
+        const toolsToWrite = computeGrantResult(id, this.currentProjectTools, this.unknownProjectTools);
+        if (this.onPersist(toolsToWrite) === false) return;
         this.currentProjectTools.add(id);
-        this.onPersist([...this.currentProjectTools, ...this.unknownProjectTools]);
         this.rebuildLists();
       },
       () => this.onDone(),
@@ -149,6 +156,7 @@ export class TwoPaneToolPicker {
   }
 
   private rebuildLists(): void {
+    // ponytail: rebuilding resets search and selection after a move; preserve them if this proves disruptive.
     const { granted, available } = partitionTools(this.visibleToolNames, this.globalTools, this.currentProjectTools);
     this.grantedList = this.buildGrantedList(granted);
     this.availableList = this.buildAvailableList(available);
@@ -326,7 +334,7 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
         const headerText = new Text(
           `Project tool grants for agent: ${agentName}\n` +
             `Project grants are additive — removing a project grant cannot remove access provided by frontmatter or global settings. Grants have no effect when the agent's base already allows all tools (no frontmatter tools and no global toolAllowlist).\n` +
-            `Controls: ← → or Tab to switch column · Enter to move tool · ↑ ↓ / type to navigate · Esc to close\n`,
+            `Controls: ← → or Tab to switch column · Enter/Space to move tool · ↑ ↓ / type to navigate · Esc to close\n`,
         );
 
         const picker = new TwoPaneToolPicker(
@@ -339,9 +347,11 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
           (toolsToWrite) => {
             try {
               updateProjectAgentTools(ctx.cwd, agentName, toolsToWrite);
+              return true as const;
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : String(err);
               ctx.ui.notify(`Failed to update project config: ${msg}`, "error");
+              return false as const;
             }
           },
           () => done(undefined),

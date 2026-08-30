@@ -110,7 +110,7 @@ Each move is persisted immediately to `.pi/imps.json` and affects subsequently s
 |-----|--------|
 | `← →` or `Tab` | Switch active column |
 | `↑ ↓` or type | Navigate / search within column |
-| `Enter` | Move selected tool to other column |
+| `Enter` or `Space` | Move selected tool to other column |
 | `Esc` | Close |
 
 > **Project grants are additive.** Removing a project grant cannot revoke access provided by the agent's frontmatter `tools` or global settings. The TUI only edits `.pi/imps.json`. Project grants also have no effect when the agent's base already allows all tools (no frontmatter `tools` and no global `toolAllowlist`).
