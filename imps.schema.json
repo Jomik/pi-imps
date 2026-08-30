@@ -36,7 +36,7 @@
           "tools": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Additional tools to grant this agent beyond its frontmatter baseline."
+            "description": "Additional tools to grant this agent beyond its effective base allowlist."
           }
         },
         "additionalProperties": false
