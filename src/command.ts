@@ -1,66 +1,225 @@
 import { type ExtensionAPI, type ExtensionCommandContext, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
-import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
+import { type SettingItem, SettingsList, type SettingsListTheme, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { loadProjectConfig, updateProjectAgentTools } from "./settings.js";
 import type { AgentConfig, ImpSettings } from "./types.js";
 
 const USAGE = "/imps tools <agent-name>";
 
 /**
- * Build SettingItem list for the tools TUI.
+ * Partition visible tools into the Granted and Available columns.
  *
- * - Tools in `globalTools` appear as read-only single-value items labelled "global".
- * - All other tools show "yes" / "no" depending on membership in `projectTools`.
+ * - Granted: tools present in globalTools (read-only) or projectTools (removable)
+ * - Available: all other visible tools
  *
  * Exported for testing.
  */
-export function buildToolItems(
-  allTools: string[],
+export function partitionTools(
+  visibleToolNames: string[],
   globalTools: ReadonlySet<string>,
   projectTools: ReadonlySet<string>,
-): SettingItem[] {
-  return allTools.map((toolName) => {
-    if (globalTools.has(toolName)) {
-      return {
-        id: toolName,
-        label: toolName,
-        description: "Granted via global settings (read-only)",
-        currentValue: "global",
-        values: ["global"],
-      };
+): { granted: string[]; available: string[] } {
+  const granted: string[] = [];
+  const available: string[] = [];
+  for (const name of visibleToolNames) {
+    if (globalTools.has(name) || projectTools.has(name)) {
+      granted.push(name);
+    } else {
+      available.push(name);
     }
-    return {
-      id: toolName,
-      label: toolName,
-      currentValue: projectTools.has(toolName) ? "yes" : "no",
-      values: ["yes", "no"],
-    };
-  });
+  }
+  return { granted, available };
 }
 
 /**
- * Apply a single toggle event from SettingsList and return the merged tools
- * array to persist (known toggled tools + unknown preserved tools), or `null`
- * if the tool is globally granted and therefore read-only.
+ * Compute the tools array to persist after granting a tool to a project.
  *
- * Mutates `currentProjectTools` in place.
+ * Pure — does not mutate currentProjectTools. Includes unknown preserved tools.
  * Exported for testing.
  */
-export function applyToolToggle(
-  id: string,
-  newValue: string,
+export function computeGrantResult(
+  toolName: string,
+  currentProjectTools: ReadonlySet<string>,
+  unknownProjectTools: readonly string[],
+): string[] {
+  const updated = new Set(currentProjectTools);
+  updated.add(toolName);
+  return [...updated, ...unknownProjectTools];
+}
+
+/**
+ * Compute the tools array to persist after revoking a project-granted tool.
+ *
+ * Returns null if the tool is globally granted (read-only — caller must not mutate).
+ * Pure — does not mutate currentProjectTools. Includes unknown preserved tools.
+ * Exported for testing.
+ */
+export function computeRevokeResult(
+  toolName: string,
   globalTools: ReadonlySet<string>,
-  currentProjectTools: Set<string>,
+  currentProjectTools: ReadonlySet<string>,
   unknownProjectTools: readonly string[],
 ): string[] | null {
-  if (globalTools.has(id)) return null;
+  if (globalTools.has(toolName)) return null;
+  const updated = new Set(currentProjectTools);
+  updated.delete(toolName);
+  return [...updated, ...unknownProjectTools];
+}
 
-  if (newValue === "yes") {
-    currentProjectTools.add(id);
-  } else {
-    currentProjectTools.delete(id);
+function buildGrantedItem(toolName: string, globalTools: ReadonlySet<string>): SettingItem {
+  if (globalTools.has(toolName)) {
+    return {
+      id: toolName,
+      label: toolName,
+      description: "Granted via global settings (read-only)",
+      currentValue: "global",
+      values: ["global"],
+    };
+  }
+  return { id: toolName, label: toolName, currentValue: "", values: [""] };
+}
+
+function buildAvailableItem(toolName: string): SettingItem {
+  return { id: toolName, label: toolName, currentValue: "", values: [""] };
+}
+
+/**
+ * Side-by-side two-pane tool picker.
+ *
+ * Left column (Granted): globally-granted tools (read-only) and project-granted tools
+ * (Enter removes). Right column (Available): tools not yet granted (Enter grants).
+ *
+ * Left/right arrows and Tab switch the active column. Up/down, typing, and Enter are
+ * routed to the active SettingsList. Escape closes from the active list.
+ * Each column has independent fuzzy search.
+ *
+ * Exported for testing.
+ */
+export class TwoPaneToolPicker {
+  private grantedList: SettingsList;
+  private availableList: SettingsList;
+  private activeColumn: 0 | 1; // 0 = Granted, 1 = Available
+
+  constructor(
+    private readonly visibleToolNames: string[],
+    private readonly globalTools: ReadonlySet<string>,
+    private readonly currentProjectTools: Set<string>,
+    private readonly unknownProjectTools: readonly string[],
+    private readonly theme: SettingsListTheme,
+    private readonly maxVisible: number,
+    private readonly onPersist: (tools: string[]) => void,
+    private readonly onDone: () => void,
+  ) {
+    const { granted, available } = partitionTools(visibleToolNames, globalTools, currentProjectTools);
+    this.activeColumn = available.length > 0 ? 1 : 0;
+    this.grantedList = this.buildGrantedList(granted);
+    this.availableList = this.buildAvailableList(available);
   }
 
-  return [...currentProjectTools, ...unknownProjectTools];
+  private buildGrantedList(grantedToolNames: string[]): SettingsList {
+    const items = grantedToolNames.map((name) => buildGrantedItem(name, this.globalTools));
+    return new SettingsList(
+      items,
+      this.maxVisible,
+      this.theme,
+      (id, _newValue) => {
+        if (this.globalTools.has(id)) return; // globally granted — read-only
+        this.currentProjectTools.delete(id);
+        this.onPersist([...this.currentProjectTools, ...this.unknownProjectTools]);
+        this.rebuildLists();
+      },
+      () => this.onDone(),
+      { enableSearch: true },
+    );
+  }
+
+  private buildAvailableList(availableToolNames: string[]): SettingsList {
+    const items = availableToolNames.map((name) => buildAvailableItem(name));
+    return new SettingsList(
+      items,
+      this.maxVisible,
+      this.theme,
+      (id, _newValue) => {
+        this.currentProjectTools.add(id);
+        this.onPersist([...this.currentProjectTools, ...this.unknownProjectTools]);
+        this.rebuildLists();
+      },
+      () => this.onDone(),
+      { enableSearch: true },
+    );
+  }
+
+  private rebuildLists(): void {
+    const { granted, available } = partitionTools(this.visibleToolNames, this.globalTools, this.currentProjectTools);
+    this.grantedList = this.buildGrantedList(granted);
+    this.availableList = this.buildAvailableList(available);
+    // Keep current column; switch if it becomes empty while the other is not.
+    if (this.activeColumn === 1 && available.length === 0 && granted.length > 0) {
+      this.activeColumn = 0;
+    } else if (this.activeColumn === 0 && granted.length === 0 && available.length > 0) {
+      this.activeColumn = 1;
+    }
+  }
+
+  invalidate(): void {
+    this.grantedList.invalidate();
+    this.availableList.invalidate();
+  }
+
+  render(width: number): string[] {
+    // Split width evenly: left column gets floor(width/2)-1 chars, 1-char gap, right gets rest.
+    const leftWidth = Math.max(1, Math.floor(width / 2) - 1);
+    const rightWidth = Math.max(1, width - leftWidth - 1);
+
+    // Column headers — the active column is marked with ▶.
+    const grantedHeaderRaw = truncateToWidth(
+      `${this.activeColumn === 0 ? "▶ " : "  "}Granted`,
+      leftWidth,
+      "",
+      true, // pad to leftWidth so right column aligns
+    );
+    const availableHeaderRaw = truncateToWidth(`${this.activeColumn === 1 ? "▶ " : "  "}Available`, rightWidth);
+    const headerLine = truncateToWidth(
+      this.theme.label(grantedHeaderRaw, this.activeColumn === 0) +
+        " " +
+        this.theme.label(availableHeaderRaw, this.activeColumn === 1),
+      width,
+    );
+
+    const grantedLines = this.grantedList.render(leftWidth);
+    const availableLines = this.availableList.render(rightWidth);
+    const maxLines = Math.max(grantedLines.length, availableLines.length);
+
+    const result: string[] = [headerLine];
+    for (let i = 0; i < maxLines; i++) {
+      const leftLine = grantedLines[i] ?? "";
+      const rightLine = availableLines[i] ?? "";
+      // Pad left side to leftWidth so the gap falls at the correct column.
+      const leftPadded = truncateToWidth(leftLine, leftWidth, "", true);
+      result.push(truncateToWidth(`${leftPadded} ${rightLine}`, width));
+    }
+    return result;
+  }
+
+  handleInput(data: string): void {
+    // Intercept column-switching keys before routing to the active SettingsList.
+    // Tab toggles columns; right arrow goes to Available; left arrow goes to Granted.
+    if (data === "\t") {
+      this.activeColumn = this.activeColumn === 0 ? 1 : 0;
+      return;
+    }
+    if (data === "\x1b[C" || data === "\x1bOC") {
+      // Right arrow — switch to Available
+      this.activeColumn = 1;
+      return;
+    }
+    if (data === "\x1b[D" || data === "\x1bOD") {
+      // Left arrow — switch to Granted
+      this.activeColumn = 0;
+      return;
+    }
+    const activeList = this.activeColumn === 0 ? this.grantedList : this.availableList;
+    activeList.handleInput?.(data);
+  }
 }
 
 /**
@@ -156,20 +315,28 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
       // every write so they are not silently dropped.
       const unknownProjectTools = existingProjectToolNames.filter((t) => !visibleToolNames.includes(t));
 
-      // Mutable set tracking which visible tools are currently toggled on.
+      // Mutable set tracking which visible tools are currently project-granted.
       const currentProjectTools = new Set<string>(existingProjectToolNames.filter((t) => visibleToolNames.includes(t)));
 
-      const items = buildToolItems(visibleToolNames, globalTools, currentProjectTools);
+      const maxVisible = Math.min(visibleToolNames.length + 2, 20);
 
       await ctx.ui.custom((tui, _theme, _kb, done) => {
-        const settingsList = new SettingsList(
-          items,
-          Math.min(items.length + 2, 20),
-          getSettingsListTheme(),
-          (id, newValue) => {
-            const toolsToWrite = applyToolToggle(id, newValue, globalTools, currentProjectTools, unknownProjectTools);
-            if (toolsToWrite === null) return; // global — read-only
+        const theme = getSettingsListTheme();
 
+        const headerText = new Text(
+          `Project tool grants for agent: ${agentName}\n` +
+            `Project grants are additive — removing a project grant cannot remove access provided by frontmatter or global settings. Grants have no effect when the agent's base already allows all tools (no frontmatter tools and no global toolAllowlist).\n` +
+            `Controls: ← → or Tab to switch column · Enter to move tool · ↑ ↓ / type to navigate · Esc to close\n`,
+        );
+
+        const picker = new TwoPaneToolPicker(
+          visibleToolNames,
+          globalTools,
+          currentProjectTools,
+          unknownProjectTools,
+          theme,
+          maxVisible,
+          (toolsToWrite) => {
             try {
               updateProjectAgentTools(ctx.cwd, agentName, toolsToWrite);
             } catch (err: unknown) {
@@ -178,26 +345,18 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
             }
           },
           () => done(undefined),
-          { enableSearch: true },
         );
-
-        const header = new Text(
-          `Project tool grants for agent: ${agentName}\nProject grants are additive — removing a project grant cannot remove access provided by frontmatter or global settings. Grants have no effect when the agent's base already allows all tools (no frontmatter tools and no global toolAllowlist).\n`,
-        );
-
-        const container = new Container();
-        container.addChild(header);
-        container.addChild(settingsList);
 
         return {
           render(width: number): string[] {
-            return container.render(width);
+            return [...headerText.render(width), ...picker.render(width)];
           },
           invalidate(): void {
-            container.invalidate();
+            headerText.invalidate?.();
+            picker.invalidate();
           },
           handleInput(data: string): void {
-            settingsList.handleInput?.(data);
+            picker.handleInput(data);
             tui.requestRender();
           },
         };

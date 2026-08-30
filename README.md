@@ -98,12 +98,20 @@ Open an interactive TUI to manage per-project additive tool grants for a named a
 
 The agent name autocompletes from discovered agents. Unknown subcommands or agent names show concise usage guidance.
 
-The searchable tool list shows registered tools that are not already enabled by the agent's frontmatter `tools`, sorted alphabetically:
+The picker shows two side-by-side searchable columns. Tools already enabled by the agent's frontmatter `tools` are hidden from both columns.
 
-- **`global`** — tool is granted via global `~/.pi/agent/imps.json` settings (read-only in this UI).
-- **`yes` / `no`** — toggle project-level grant in `.pi/imps.json` for the named agent.
+**Granted** — tools currently granted to this agent. Global grants (from `~/.pi/agent/imps.json`) show `global` and are read-only. Project grants (from `.pi/imps.json`) can be removed with Enter.
 
-Each toggle is persisted immediately and affects subsequently summoned imps. Tools already present in `.pi/imps.json` that are not currently registered in the session are preserved on every write.
+**Available** — registered tools not yet granted. Press Enter to grant a tool to the project config.
+
+Each move is persisted immediately to `.pi/imps.json` and affects subsequently summoned imps. Tools already present in `.pi/imps.json` that are not currently registered in the session are preserved on every write.
+
+| Key | Action |
+|-----|--------|
+| `← →` or `Tab` | Switch active column |
+| `↑ ↓` or type | Navigate / search within column |
+| `Enter` | Move selected tool to other column |
+| `Esc` | Close |
 
 > **Project grants are additive.** Removing a project grant cannot revoke access provided by the agent's frontmatter `tools` or global settings. The TUI only edits `.pi/imps.json`. Project grants also have no effect when the agent's base already allows all tools (no frontmatter `tools` and no global `toolAllowlist`).
 
