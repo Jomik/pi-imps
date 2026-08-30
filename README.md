@@ -98,7 +98,7 @@ Open an interactive TUI to manage per-project additive tool grants for a named a
 
 The agent name autocompletes from discovered agents. Unknown subcommands or agent names show concise usage guidance.
 
-The tool list shows every tool currently registered in the session, sorted alphabetically:
+The searchable tool list shows registered tools that are not already enabled by the agent's frontmatter `tools`, sorted alphabetically:
 
 - **`global`** — tool is granted via global `~/.pi/agent/imps.json` settings (read-only in this UI).
 - **`yes` / `no`** — toggle project-level grant in `.pi/imps.json` for the named agent.

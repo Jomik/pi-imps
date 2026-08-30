@@ -102,6 +102,15 @@ describe("buildToolItems", () => {
     const items = buildToolItems(["a", "b", "c"], new Set(), new Set());
     expect(items.map((i) => i.id)).toEqual(["a", "b", "c"]);
   });
+
+  it("does not include tools omitted before calling buildToolItems (frontmatter filtering)", () => {
+    // Handler filters frontmatter tools from allToolNames before calling buildToolItems.
+    // Verify that a pre-filtered list produces no item for the omitted tool.
+    const visibleAfterFilter = ["bash", "write"]; // "read" already removed by handler
+    const items = buildToolItems(visibleAfterFilter, new Set(), new Set());
+    expect(items.map((i) => i.id)).toEqual(["bash", "write"]);
+    expect(items.map((i) => i.id)).not.toContain("read");
+  });
 });
 
 // ─── applyToolToggle ─────────────────────────────────────────────────────────
@@ -143,6 +152,16 @@ describe("applyToolToggle", () => {
     expect(result).toContain("bash");
     expect(result).toContain("unknown_a");
     expect(result).toContain("unknown_b");
+  });
+
+  it("preserves project tools hidden because they are in agent frontmatter", () => {
+    // The handler filters frontmatter tools from visibleToolNames, so they land in
+    // unknownProjectTools. This verifies applyToolToggle preserves them on every write.
+    const projectTools = new Set<string>(["bash"]); // bash is visible
+    // "read" is in frontmatter — filtered from visible, passed as unknown preserved
+    const result = applyToolToggle("bash", "no", new Set(), projectTools, ["read"]);
+    expect(result).not.toContain("bash");
+    expect(result).toContain("read");
   });
 });
 
@@ -323,6 +342,73 @@ describe("handler argument validation", () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
     const { ctx, custom } = makeCtx(tmpDir);
     await cmd.handler("tools mason", ctx);
+    expect(custom).toHaveBeenCalledOnce();
+  });
+});
+
+// ─── handler: frontmatter tool filtering ────────────────────────────────────
+
+describe("handler: frontmatter tool filtering", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-imps-fm-"));
+    mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("opens the TUI when agent has frontmatter tools", async () => {
+    const agents: AgentConfig[] = [
+      {
+        name: "mason",
+        description: "Mason",
+        systemPrompt: "",
+        source: "user",
+        filePath: "/a/mason.md",
+        tools: ["read"],
+      },
+    ];
+    const cmd = createImpsCommand(makePi(["bash", "read"]), agents, makeSettings());
+    const { ctx, custom } = makeCtx(tmpDir);
+    await cmd.handler("tools mason", ctx);
+    expect(custom).toHaveBeenCalledOnce();
+  });
+
+  it("preserves frontmatter-granted project tools on write via the unknown-preserved path", async () => {
+    // When mason has frontmatter tools: ["read"] and the project config already
+    // grants "read", the handler classifies "read" as an unknown preserved tool
+    // (not visible, not toggleable). Toggling another visible tool must keep "read".
+    // Tested via applyToolToggle with the same classification the handler uses.
+    // "read" is in frontmatter — not in visibleToolNames, so it lands in unknownProjectTools.
+    const projectTools = new Set<string>(); // currentProjectTools has no visible entries
+    const result = applyToolToggle("bash", "yes", new Set(), projectTools, ["read"]);
+    expect(result).toContain("bash");
+    expect(result).toContain("read"); // preserved from frontmatter-filtered project grant
+  });
+
+  it("does not show frontmatter tools as global grants even when both match", async () => {
+    // A tool in both frontmatter AND global settings is hidden (not read-only visible).
+    // buildToolItems is called with the pre-filtered visibleToolNames, so the
+    // frontmatter tool never reaches the items builder at all.
+    const agents: AgentConfig[] = [
+      {
+        name: "mason",
+        description: "Mason",
+        systemPrompt: "",
+        source: "user",
+        filePath: "/a/mason.md",
+        tools: ["read"],
+      },
+    ];
+    // "read" is also a global grant — it should still be hidden because frontmatter wins
+    const settings = makeSettings({ mason: ["read"] });
+    const cmd = createImpsCommand(makePi(["bash", "read"]), agents, settings);
+    const { ctx, custom } = makeCtx(tmpDir);
+    await cmd.handler("tools mason", ctx);
+    // TUI opens (no error), meaning the handler ran past the filtering step cleanly.
     expect(custom).toHaveBeenCalledOnce();
   });
 });

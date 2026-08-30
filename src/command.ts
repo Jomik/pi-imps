@@ -139,6 +139,7 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
         return;
       }
 
+      const frontmatterTools = new Set<string>(agent.tools ?? []);
       const globalTools = new Set<string>(settings.agents[agentName]?.tools ?? []);
       const existingProjectToolNames = projectConfig.agents?.[agentName]?.tools ?? [];
       const allToolNames = pi
@@ -146,14 +147,19 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
         .map((t) => t.name)
         .sort();
 
-      // Tools in the project config that are not currently registered — preserve
-      // them on every write so they are not silently dropped.
-      const unknownProjectTools = existingProjectToolNames.filter((t) => !allToolNames.includes(t));
+      // Tools in agent frontmatter are already configured — hide them from the picker.
+      // Global grants that are also in frontmatter are hidden for the same reason.
+      const visibleToolNames = allToolNames.filter((t) => !frontmatterTools.has(t));
 
-      // Mutable set tracking which known tools are currently toggled on.
-      const currentProjectTools = new Set<string>(existingProjectToolNames.filter((t) => allToolNames.includes(t)));
+      // Tools in the project config that are not in the visible list — either
+      // unregistered or already covered by agent frontmatter — are preserved on
+      // every write so they are not silently dropped.
+      const unknownProjectTools = existingProjectToolNames.filter((t) => !visibleToolNames.includes(t));
 
-      const items = buildToolItems(allToolNames, globalTools, currentProjectTools);
+      // Mutable set tracking which visible tools are currently toggled on.
+      const currentProjectTools = new Set<string>(existingProjectToolNames.filter((t) => visibleToolNames.includes(t)));
+
+      const items = buildToolItems(visibleToolNames, globalTools, currentProjectTools);
 
       await ctx.ui.custom((tui, _theme, _kb, done) => {
         const settingsList = new SettingsList(
@@ -172,6 +178,7 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
             }
           },
           () => done(undefined),
+          { enableSearch: true },
         );
 
         const header = new Text(
