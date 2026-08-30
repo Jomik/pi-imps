@@ -16,7 +16,7 @@ function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
     resolveDone = r;
   });
   return {
-    agent: undefined,
+    agent: "test-agent",
     task: "test",
     startedAt: Date.now(),
     controller: new AbortController(),
@@ -57,7 +57,7 @@ describe("summonTool renderResult", () => {
     const component = tool.renderResult?.(
       {
         content: [{ type: "text", text: JSON.stringify({ name: "imp-1" }) }],
-        details: { name: "imp-1", agent: undefined, task: "Review\n  the code" },
+        details: { name: "imp-1", agent: "test-agent", task: "Review\n  the code" },
       },
       { expanded: false, isPartial: false },
       theme,
@@ -65,7 +65,7 @@ describe("summonTool renderResult", () => {
     );
 
     const rendered = component?.render(120).join("\n") ?? "";
-    expect(rendered).toContain("imp-1 has answered your summons!");
+    expect(rendered).toContain("imp-1 the test-agent has answered your summons!");
     expect(rendered).toContain("Review the code");
     expect(rendered).toContain("expand");
     expect(rendered).not.toContain("Review\n");
@@ -140,22 +140,6 @@ describe("waitTool", () => {
 
     expect(imps.size).toBe(0);
   });
-
-  it("ephemeral imp omits agent field", async () => {
-    const a = makeImp({
-      name: "eve",
-      status: "completed",
-      output: "result",
-    });
-    a.resolveDone();
-
-    const imps = buildMap(a);
-    const tool = waitTool(imps);
-    const result = await tool.execute("tc1", { mode: "all" }, undefined, undefined, nullCtx);
-    const json = parseResult(result);
-
-    expect(json[0]).not.toHaveProperty("agent");
-  });
 });
 // ─── list_imps ──────────────────────────────────────────────────────────────
 
@@ -177,8 +161,8 @@ describe("listImpsTool", () => {
 
     expect(json).toEqual([
       { name: "alice", status: "completed", agent: "sentinel", output: "ok" },
-      { name: "bob", status: "running" },
-      { name: "carl", status: "dismissed" },
+      { name: "bob", status: "running", agent: "test-agent" },
+      { name: "carl", status: "dismissed", agent: "test-agent" },
     ]);
   });
 

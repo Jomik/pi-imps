@@ -94,13 +94,6 @@ describe("parseImpSettings", () => {
     });
   });
 
-  it("reads ephemeral agent key '_'", () => {
-    const settings = parseImpSettings({
-      agents: { _: { tools: ["run_tests"] } },
-    });
-    expect(settings.agents._).toEqual({ tools: ["run_tests"] });
-  });
-
   it("returns empty agents when agents is not an object", () => {
     expect(parseImpSettings({ agents: "invalid" }).agents).toEqual({});
     expect(parseImpSettings({ agents: ["bad"] }).agents).toEqual({});
@@ -230,12 +223,6 @@ describe("loadProjectConfig", () => {
     );
     const config = loadProjectConfig(tmpDir);
     expect(config.agents).toEqual({ mason: { tools: ["run_tests", "run_checks"] } });
-  });
-
-  it("reads ephemeral agent '_' key", () => {
-    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { _: { tools: ["run_tests"] } } }));
-    const config = loadProjectConfig(tmpDir);
-    expect(config.agents?._).toEqual({ tools: ["run_tests"] });
   });
 
   it("validates agents: ignores non-array tools", () => {

@@ -8,8 +8,7 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-function formatAgentSuffix(agent: string | undefined, theme: Theme): string {
-  if (!agent) return "";
+function formatAgentSuffix(agent: string, theme: Theme): string {
   return ` the ${theme.fg("muted", agent)}`;
 }
 
@@ -51,10 +50,7 @@ export function formatImpStatusDisplay(imp: ImpSnapshot, theme: Theme, animation
 /**
  * Format summon result for TUI display (themed).
  */
-export function formatSummonDisplay(name: string, agent: string | undefined, theme: Theme): string {
-  if (!agent) {
-    return `${theme.fg("accent", name)} has answered your summons!`;
-  }
+export function formatSummonDisplay(name: string, agent: string, theme: Theme): string {
   return `${theme.fg("accent", name)} the ${theme.fg("muted", agent)} has answered your summons!`;
 }
 

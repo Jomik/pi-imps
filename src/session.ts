@@ -36,7 +36,7 @@ const FINAL_TURN_DIRECTIVE =
 
 export interface SpawnImpSessionOptions {
   task: string;
-  config: AgentConfig | undefined; // undefined = ephemeral
+  config: AgentConfig;
   cwd: string;
   parentModel: Model<Api>;
   parentThinkingLevel: ThinkingLevel;
@@ -74,16 +74,16 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     onComplete,
   } = opts;
 
-  const systemPrompt = config?.systemPrompt;
+  const systemPrompt = config.systemPrompt;
 
   // Load project config and resolve per-agent additive tools
   const projectConfig = loadProjectConfig(cwd);
-  const agentKey = config?.name ?? "_";
+  const agentKey = config.name;
   const globalAgentTools = settings.agents[agentKey]?.tools;
   const projectAgentTools = projectConfig.agents?.[agentKey]?.tools;
   const additiveTools = mergeAdditiveTools(globalAgentTools, projectAgentTools);
 
-  const toolAllowlist = resolveToolAllowlist(config?.tools, settings.toolAllowlist, additiveTools);
+  const toolAllowlist = resolveToolAllowlist(config.tools, settings.toolAllowlist, additiveTools);
 
   const loader = new DefaultResourceLoader({
     cwd,
@@ -103,7 +103,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
 
   // Resolve model: named agent's model or parent model
   let model = parentModel;
-  if (config?.model) {
+  if (config.model) {
     const available = modelRegistry.getAvailable();
     const resolved = available.find((m) => m.name === config.model || m.id === config.model);
     if (!resolved) {
@@ -133,7 +133,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   let truncated = false;
   let providerError: string | undefined;
 
-  const turnLimit = resolveTurnLimit(config?.turnLimit, settings.turnLimit);
+  const turnLimit = resolveTurnLimit(config.turnLimit, settings.turnLimit);
 
   function extractAssistantText(content: Array<{ type: string; text?: string }>) {
     const parts = content.filter((c): c is { type: "text"; text: string } => c.type === "text");

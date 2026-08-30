@@ -29,7 +29,7 @@
     },
     "agents": {
       "type": "object",
-      "description": "Per-agent additive tool grants. Keys are agent names (use \"_\" for ephemeral imps). Tools listed here are unioned with the agent's frontmatter tools.",
+      "description": "Per-agent additive tool grants. Keys are agent names. Tools listed here are unioned with the agent's frontmatter tools.",
       "additionalProperties": {
         "type": "object",
         "properties": {

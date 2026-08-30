@@ -30,7 +30,7 @@ The LLM calls `summon` to launch imps, `wait` to collect results, and the output
 
 | Tool | What it does |
 |------|-------------|
-| `summon` | Launch a background imp. Returns immediately with a name. |
+| `summon` | Launch a background imp. Requires a named `agent`. Returns immediately with a name. |
 | `wait` | Block until imps finish. `mode: "all"` waits for everything; `mode: "first"` returns the first to complete. Optional `names` array to target specific imps. |
 | `dismiss` | Kill running imps by name or `"all"`. |
 | `list_imps` | Check status without blocking. |
@@ -56,8 +56,6 @@ You are a security reviewer. Focus on authentication, authorization, and input v
 | `model` | no | Model to use. Omit to inherit the parent session's model |
 | `tools` | no | Restrict which tools the agent can use. Omit to allow all tools |
 | `turns` | no | Per-agent turn limit (minimum 2). Overrides the global `turnLimit` setting |
-
-Ephemeral imps (summoned without an `agent` name) inherit the parent session's model.
 
 ### Tool allowlist
 
@@ -131,7 +129,7 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
 | `turnLimit` | number | 30 | Max turns per imp (minimum 2) |
 | `toolAllowlist` | string[] | all tools | Default tool allowlist for all imps. Overridden by agent frontmatter `tools`. |
 | `additionalExtensions` | string[] | none | Extensions that always load on imp sessions regardless of tool filtering |
-| `agents` | object | none | Per-agent additive tool grants. Keys are agent names (`"_"` for ephemeral). Tools are unioned with the agent's frontmatter. |
+| `agents` | object | none | Per-agent additive tool grants. Keys are agent names. Tools are unioned with the agent's frontmatter. |
 
 ### Project config
 

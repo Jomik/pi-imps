@@ -43,12 +43,12 @@ function impToSnapshot(imp: Imp): ImpSnapshot {
 
 const SummonParams = Type.Object({
   task: Type.String({ description: "What the imp should do", minLength: 10 }),
-  agent: Type.Optional(Type.String({ description: "Named agent to use, or omit for ephemeral", minLength: 1 })),
+  agent: Type.String({ description: "Named agent to use", minLength: 1 }),
 });
 
 interface SummonDetails {
   name: string;
-  agent: string | undefined;
+  agent: string;
   task: string;
 }
 
@@ -69,7 +69,7 @@ export function summonTool(
     parameters: SummonParams,
     async execute(
       _toolCallId: string,
-      params: { task: string; agent?: string },
+      params: { task: string; agent: string },
       _signal: AbortSignal | undefined,
       _onUpdate: AgentToolUpdateCallback | undefined,
       ctx: ExtensionContext,
@@ -77,41 +77,37 @@ export function summonTool(
       const name = namePool.allocate();
 
       // Resolve agent config
-      let config: AgentConfig | undefined;
-      let agent: string | undefined;
-      if (params.agent) {
-        config = agents.find((a) => a.name === params.agent);
-        if (!config) {
+      const config = agents.find((a) => a.name === params.agent);
+      if (!config) {
+        namePool.release(name);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Unknown agent: ${params.agent}. Available: ${agents.map((a) => a.name).join(", ") || "none"}`,
+            },
+          ],
+          details: undefined,
+        };
+      }
+      const agent = config.name;
+
+      // Verify the agent's model exists in the registry
+      if (config.model) {
+        const available = ctx.modelRegistry.getAvailable();
+        const resolved = available.find((m) => m.name === config.model || m.id === config.model);
+        if (!resolved) {
           namePool.release(name);
+          const modelNames = available.map((m) => m.name).join(", ");
           return {
             content: [
               {
                 type: "text",
-                text: `Unknown agent: ${params.agent}. Available: ${agents.map((a) => a.name).join(", ") || "none"}`,
+                text: `Agent "${config.name}" requires model "${config.model}" which is not available. Models: ${modelNames || "none"}`,
               },
             ],
             details: undefined,
           };
-        }
-        agent = config.name;
-
-        // Verify the agent's model exists in the registry
-        if (config.model) {
-          const available = ctx.modelRegistry.getAvailable();
-          const resolved = available.find((m) => m.name === config?.model || m.id === config?.model);
-          if (!resolved) {
-            namePool.release(name);
-            const modelNames = available.map((m) => m.name).join(", ");
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Agent "${config.name}" requires model "${config.model}" which is not available. Models: ${modelNames || "none"}`,
-                },
-              ],
-              details: undefined,
-            };
-          }
         }
       }
 

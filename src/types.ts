@@ -3,7 +3,7 @@ export type ImpStatus = "running" | "completed" | "failed" | "dismissed" | "trun
 /** Serializable subset of Imp — safe for details/display, no runtime handles. */
 export interface ImpSnapshot {
   readonly name: string;
-  readonly agent: string | undefined;
+  readonly agent: string;
   status: ImpStatus;
   turns: number;
   tokens: { input: number; output: number };
