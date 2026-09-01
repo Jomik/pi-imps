@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildAgentsBlock, discoverAgents } from "./agents.js";
+import { createImpsCommand } from "./command.js";
 import { createNamePool } from "./names.js";
 import { loadImpSettings } from "./settings.js";
 import { runningImps } from "./state.js";
@@ -53,8 +54,12 @@ export default function (pi: ExtensionAPI): void {
 
   // ── Tools ──────────────────────────────────────────────────────────────
 
-  pi.registerTool(summonTool(imps, agents, namePool, loadImpSettings(), () => pi.getThinkingLevel()));
+  const settings = loadImpSettings();
+
+  pi.registerTool(summonTool(imps, agents, namePool, settings, () => pi.getThinkingLevel()));
   pi.registerTool(waitTool(imps));
   pi.registerTool(dismissTool(imps, namePool));
   pi.registerTool(listImpsTool(imps));
+
+  pi.registerCommand("imps", createImpsCommand(pi, agents, settings));
 }

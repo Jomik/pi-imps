@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadImpSettings, loadProjectConfig, parseImpSettings } from "../src/settings.js";
+import { loadImpSettings, loadProjectConfig, parseImpSettings, updateProjectAgentTools } from "../src/settings.js";
 
 describe("parseImpSettings", () => {
   it("returns defaults when block is undefined", () => {
@@ -92,13 +92,6 @@ describe("parseImpSettings", () => {
       mason: { tools: ["run_tests", "run_checks"] },
       sentinel: { tools: ["run_tests"] },
     });
-  });
-
-  it("reads ephemeral agent key '_'", () => {
-    const settings = parseImpSettings({
-      agents: { _: { tools: ["run_tests"] } },
-    });
-    expect(settings.agents._).toEqual({ tools: ["run_tests"] });
   });
 
   it("returns empty agents when agents is not an object", () => {
@@ -212,6 +205,11 @@ describe("loadProjectConfig", () => {
     expect(config).toEqual({});
   });
 
+  it("throws when .pi/imps.json is a directory (EISDIR)", () => {
+    mkdirSync(join(piDir, "imps.json"), { recursive: true });
+    expect(() => loadProjectConfig(tmpDir)).toThrow();
+  });
+
   it("returns empty config when .pi directory does not exist", () => {
     rmSync(piDir, { recursive: true, force: true });
     const config = loadProjectConfig(tmpDir);
@@ -232,16 +230,149 @@ describe("loadProjectConfig", () => {
     expect(config.agents).toEqual({ mason: { tools: ["run_tests", "run_checks"] } });
   });
 
-  it("reads ephemeral agent '_' key", () => {
-    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { _: { tools: ["run_tests"] } } }));
-    const config = loadProjectConfig(tmpDir);
-    expect(config.agents?._).toEqual({ tools: ["run_tests"] });
-  });
-
   it("validates agents: ignores non-array tools", () => {
     writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: "run_tests" } } }));
     const config = loadProjectConfig(tmpDir);
     // tools: "run_tests" (string) should be rejected; entry becomes {}
     expect(config.agents?.mason).toEqual({});
+  });
+
+  it("throws on non-object root", () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify([1, 2, 3]));
+    expect(() => loadProjectConfig(tmpDir)).toThrow();
+  });
+
+  it("throws on non-object agents field", () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: "bad" }));
+    expect(() => loadProjectConfig(tmpDir)).toThrow();
+  });
+
+  it("throws on non-object agent entry", () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: "bad" } }));
+    expect(() => loadProjectConfig(tmpDir)).toThrow();
+  });
+});
+
+// ─── updateProjectAgentTools ─────────────────────────────────────────────────
+
+describe("updateProjectAgentTools", () => {
+  let tmpDir: string;
+  let piDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-imps-update-"));
+    piDir = join(tmpDir, ".pi");
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates .pi directory and imps.json when neither exists", () => {
+    updateProjectAgentTools(tmpDir, "mason", ["run_tests"]);
+    const config = loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["run_tests"]);
+  });
+
+  it("creates imps.json when .pi exists but file does not", () => {
+    mkdirSync(piDir, { recursive: true });
+    updateProjectAgentTools(tmpDir, "mason", ["run_tests"]);
+    const config = loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["run_tests"]);
+  });
+
+  it("updates existing agent tools", () => {
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["old_tool"] } } }));
+    updateProjectAgentTools(tmpDir, "mason", ["run_tests", "run_checks"]);
+    const config = loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["run_tests", "run_checks"]);
+  });
+
+  it("preserves other agents", () => {
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(
+      join(piDir, "imps.json"),
+      JSON.stringify({ agents: { mason: { tools: ["run_tests"] }, sentinel: { tools: ["check_style"] } } }),
+    );
+    updateProjectAgentTools(tmpDir, "mason", ["run_checks"]);
+    const config = loadProjectConfig(tmpDir);
+    expect(config.agents?.sentinel?.tools).toEqual(["check_style"]);
+    expect(config.agents?.mason?.tools).toEqual(["run_checks"]);
+  });
+
+  it("preserves unrelated top-level properties", () => {
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(
+      join(piDir, "imps.json"),
+      JSON.stringify({ customProp: "value", agents: { mason: { tools: ["run_tests"] } } }),
+    );
+    updateProjectAgentTools(tmpDir, "mason", ["run_checks"]);
+    const raw = JSON.parse(readFileSync(join(piDir, "imps.json"), "utf-8")) as Record<string, unknown>;
+    expect(raw.customProp).toBe("value");
+  });
+
+  it("preserves unknown properties in target agent entry", () => {
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(
+      join(piDir, "imps.json"),
+      JSON.stringify({ agents: { mason: { tools: ["run_tests"], customKey: "preserved" } } }),
+    );
+    updateProjectAgentTools(tmpDir, "mason", ["run_checks"]);
+    const raw = JSON.parse(readFileSync(join(piDir, "imps.json"), "utf-8")) as Record<string, unknown>;
+    const masonEntry = (raw.agents as Record<string, unknown>).mason as Record<string, unknown>;
+    expect(masonEntry.customKey).toBe("preserved");
+  });
+
+  it("caller can pass unknown tool names to preserve them across writes", () => {
+    mkdirSync(piDir, { recursive: true });
+    // Simulate unknown tool 'future_tool' already in project config.
+    // The command passes it through by merging unknownProjectTools.
+    updateProjectAgentTools(tmpDir, "mason", ["run_tests", "future_tool"]);
+    const config = loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toContain("run_tests");
+    expect(config.agents?.mason?.tools).toContain("future_tool");
+  });
+
+  it("leaves no partial tmp file after successful write", () => {
+    updateProjectAgentTools(tmpDir, "mason", ["run_tests"]);
+    expect(existsSync(join(piDir, "imps.json.tmp"))).toBe(false);
+    expect(existsSync(join(piDir, "imps.json"))).toBe(true);
+  });
+
+  it("throws on invalid JSON in existing file", () => {
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, "imps.json"), "not-json");
+    expect(() => updateProjectAgentTools(tmpDir, "mason", ["run_tests"])).toThrow(SyntaxError);
+  });
+
+  it("throws on non-object root (array)", () => {
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify([1, 2, 3]));
+    expect(() => updateProjectAgentTools(tmpDir, "mason", ["run_tests"])).toThrow();
+  });
+
+  it("throws when agents field is not an object", () => {
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: "bad" }));
+    expect(() => updateProjectAgentTools(tmpDir, "mason", ["run_tests"])).toThrow();
+  });
+
+  it("throws when target agent entry is not an object", () => {
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: "bad" } }));
+    expect(() => updateProjectAgentTools(tmpDir, "mason", ["run_tests"])).toThrow();
+  });
+
+  it("does not overwrite when malformed — file remains unchanged", () => {
+    mkdirSync(piDir, { recursive: true });
+    const badContent = "{ invalid";
+    writeFileSync(join(piDir, "imps.json"), badContent);
+    try {
+      updateProjectAgentTools(tmpDir, "mason", ["run_tests"]);
+    } catch {
+      // expected
+    }
+    expect(readFileSync(join(piDir, "imps.json"), "utf-8")).toBe(badContent);
   });
 });

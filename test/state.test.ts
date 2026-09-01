@@ -8,7 +8,7 @@ function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
     resolveDone = r;
   });
   return {
-    agent: undefined,
+    agent: "test-agent",
     task: "test task",
     startedAt: Date.now(),
     controller: new AbortController(),

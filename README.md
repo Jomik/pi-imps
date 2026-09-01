@@ -30,7 +30,7 @@ The LLM calls `summon` to launch imps, `wait` to collect results, and the output
 
 | Tool | What it does |
 |------|-------------|
-| `summon` | Launch a background imp. Returns immediately with a name. |
+| `summon` | Launch a background imp. Requires a named `agent`. Returns immediately with a name. |
 | `wait` | Block until imps finish. `mode: "all"` waits for everything; `mode: "first"` returns the first to complete. Optional `names` array to target specific imps. |
 | `dismiss` | Kill running imps by name or `"all"`. |
 | `list_imps` | Check status without blocking. |
@@ -54,10 +54,8 @@ You are a security reviewer. Focus on authentication, authorization, and input v
 | `description` | yes | Shown to the LLM in the available agents list |
 | `name` | no | Override the filename-derived agent name |
 | `model` | no | Model to use. Omit to inherit the parent session's model |
-| `tools` | no | Restrict which tools the agent can use. Omit to allow all tools |
+| `tools` | no | Restrict which tools the agent can use. Omit to fall back to the global `toolAllowlist`, or all tools if no global allowlist is set |
 | `turns` | no | Per-agent turn limit (minimum 2). Overrides the global `turnLimit` setting |
-
-Ephemeral imps (summoned without an `agent` name) inherit the parent session's model.
 
 ### Tool allowlist
 
@@ -87,6 +85,46 @@ Some extensions should always load on imp sessions regardless of the tool allowl
 ```
 
 Agent frontmatter cannot override additional extensions.
+
+### Commands
+
+#### `/imps tools <agent-name>`
+
+Open an interactive TUI to manage per-project additive tool grants for a named agent.
+
+```
+/imps tools mason
+```
+
+The agent name autocompletes from discovered agents. Unknown subcommands show usage guidance; unknown agent names produce an explicit warning.
+
+The picker shows every registered tool exactly once across two side-by-side searchable columns.
+
+**Granted** — tools that have at least one source. Each tool displays all applicable source badges:
+
+| Badge | Source |
+|-------|--------|
+| `[agent]` | Agent frontmatter `tools` |
+| `[default]` | Fallback baseline: `toolAllowlist` from global settings, or all tools when neither is configured |
+| `[global]` | Per-agent grant from `~/.pi/agent/imps.json` |
+| `[project]` | Per-agent grant from `.pi/imps.json` (this project) |
+
+`[agent]` and `[default]` are mutually exclusive. Only `[project]` grants are editable here. Granted tools without a `[project]` badge are read-only — pressing Enter on them has no effect.
+
+**Available** — registered tools with no source. Press Enter to add a project grant and move the tool to Granted.
+
+Each move is persisted immediately to `.pi/imps.json` and affects subsequently summoned imps. Tools already present in `.pi/imps.json` that are not currently registered in the session are preserved on every write.
+
+| Key | Action |
+|-----|--------|
+| `← →` or `Tab` | Switch active column |
+| `↑ ↓` or type | Navigate / search within column |
+| `Enter` or `Space` | Add or remove the selected tool's `[project]` grant |
+| `Esc` | Close |
+
+> **Project grants are additive.** Removing a `[project]` grant cannot revoke access provided by `[agent]`, `[default]`, or `[global]` sources — the tool remains Granted with updated badges. The TUI only edits `.pi/imps.json`. Project grants also have no effect when the agent's base already allows all tools (no frontmatter `tools` and no global `toolAllowlist`).
+
+Requires interactive mode (TUI). Not available in print or RPC mode.
 
 ### Turn limit
 
@@ -131,7 +169,7 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
 | `turnLimit` | number | 30 | Max turns per imp (minimum 2) |
 | `toolAllowlist` | string[] | all tools | Default tool allowlist for all imps. Overridden by agent frontmatter `tools`. |
 | `additionalExtensions` | string[] | none | Extensions that always load on imp sessions regardless of tool filtering |
-| `agents` | object | none | Per-agent additive tool grants. Keys are agent names (`"_"` for ephemeral). Tools are unioned with the agent's frontmatter. |
+| `agents` | object | none | Per-agent additive tool grants. Keys are agent names. Tools are unioned with the effective base allowlist: agent frontmatter `tools` when present, otherwise global `toolAllowlist`. |
 
 ### Project config
 

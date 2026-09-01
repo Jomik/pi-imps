@@ -25,7 +25,7 @@ Summon an imp. Returns immediately with a generated name. Non-blocking — the i
 ```
 summon({
   task: string,           // what the imp should do
-  agent?: string,         // named agent, or ephemeral
+  agent: string,          // named agent to use
 }) → { name: string }
 ```
 
@@ -87,7 +87,7 @@ Running imp count in the status line. Minimal — just the count.
 
 ### Imp Sessions
 
-Ephemeral, in-memory, no persistence. Ephemeral imps inherit the parent's model; named agents use their frontmatter model.
+In-memory, no persistence. Named agents use their frontmatter model when configured; otherwise they inherit the parent's model.
 
 ### Tools
 
@@ -100,10 +100,9 @@ Configurable at three levels:
 Resolution at summon time:
 
 1. Determine the **base allowlist**:
-   - Named agent with `tools` in frontmatter → use frontmatter tools
-   - Named agent without `tools` → use settings `toolAllowlist` (or undefined = all tools)
-   - Ephemeral imp → use settings `toolAllowlist` (or undefined = all tools)
-2. Compute **additive tools**: union of `agents.<key>.tools` from global `imps.json` and project `.pi/imps.json`, where `<key>` is the agent name (or `"_"` for ephemeral imps)
+   - Agent with `tools` in frontmatter → use frontmatter tools
+   - Agent without `tools` → use settings `toolAllowlist` (or undefined = all tools)
+2. Compute **additive tools**: union of `agents.<key>.tools` from global `imps.json` and project `.pi/imps.json`, where `<key>` is the agent name
 3. Merge: if base is undefined (all tools), result is undefined (all tools) — additive tools are redundant since all tools are already available. If base is defined, result is `base ∪ additive`.
 4. Filter extensions: exclude any that provide no tools in the final allowlist
 
@@ -128,15 +127,19 @@ Project config lives at `.pi/imps.json` (project root). Both project and global 
 
 This allows projects to grant agents access to project-specific tools (e.g. armory tools like `run_tests`) without modifying global agent definitions.
 
-For ephemeral (unnamed) imps, use the key `"_"`:
+#### Project tool grants UI
 
-```json
-{
-  "agents": {
-    "_": { "tools": ["run_tests"] }
-  }
-}
-```
+The `/imps tools <agent-name>` TUI command provides a simpler way to manage project-level additive tool grants. The agent-name argument offers completion from discovered agents. A missing name produces usage guidance; an unknown name produces an explicit warning. Neither opens another selection step.
+
+The picker shows every tool currently registered in the parent pi session once, across two side-by-side searchable columns: **Granted** and **Available**. Search uses the TUI's built-in fuzzy matching. Granted tools show all applicable source badges: `agent` for explicit agent-frontmatter tools, `default` for the fallback global `toolAllowlist` (or all tools when neither baseline is configured), `global` for per-agent grants from global pi-imps settings, and `project` for project grants. The `agent` and `default` sources are mutually exclusive. The picker does not depend on pi-armory configuration details.
+
+Only the `project` source is editable. Enter or Space on an Available tool adds a project grant and moves it to Granted. On a Granted tool with a project source, it removes only that source; a project-only tool moves to Available, while a tool with another source remains Granted with updated badges. Granted tools without a project source are read-only.
+
+Left/right arrows or Tab change the active column, up/down arrows navigate it, and Escape closes the picker. The layout truncates tool names and badges as needed on narrow terminals rather than switching to a separate responsive layout. The UI states that project grants are additive and cannot remove access provided by another source.
+
+Each project-grant change is persisted to the project config and affects subsequently summoned imps. Existing settings for other agents and unrecognized tool names are preserved. If the existing config cannot be read or parsed, the command reports the error and does not overwrite it.
+
+The first version does not edit global settings or agent frontmatter, show complete effective merged permissions, identify pi-armory tool provenance, provide bulk grants, or add persistent UI.
 
 
 ### Turn Limit

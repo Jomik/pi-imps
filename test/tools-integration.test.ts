@@ -39,6 +39,14 @@ function makeSettings(overrides: Partial<ImpSettings> = {}): ImpSettings {
   return { turnLimit: 30, toolAllowlist: undefined, additionalExtensions: [], agents: {}, ...overrides };
 }
 
+const testAgent: AgentConfig = {
+  name: "coder",
+  description: "Test coder agent",
+  systemPrompt: "You are a coder.",
+  source: "user",
+  filePath: "/tmp/test-agent.md",
+};
+
 function makeNamePool() {
   const released: string[] = [];
   let counter = 0;
@@ -86,14 +94,14 @@ describe("summon → wait integration", () => {
     const ctx = createMockContext();
     installMock({ totalTurns: 2, finalText: "found 2 issues" });
 
-    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings());
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
     const wait = waitTool(imps);
 
-    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
     const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
     const json = parseResult(result);
 
-    expect(json).toEqual([{ name: "imp-1", status: "completed", output: "found 2 issues" }]);
+    expect(json).toEqual([{ name: "imp-1", status: "completed", agent: "coder", output: "found 2 issues" }]);
     expect(imps.size).toBe(0);
   });
 
@@ -103,10 +111,10 @@ describe("summon → wait integration", () => {
     const ctx = createMockContext();
     installMock({ failOnPrompt: "session crashed" });
 
-    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings());
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
     const wait = waitTool(imps);
 
-    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
     const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
     const json = parseResult(result);
 
@@ -120,10 +128,10 @@ describe("summon → wait integration", () => {
     const ctx = createMockContext();
     installMock({ totalTurns: 1 });
 
-    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings(), () => "max");
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings(), () => "max");
     const wait = waitTool(imps);
 
-    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
     await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
 
     expect(vi.mocked(createAgentSession)).toHaveBeenCalledWith(expect.objectContaining({ thinkingLevel: "xhigh" }));
@@ -135,10 +143,10 @@ describe("summon → wait integration", () => {
     const ctx = createMockContext();
     const mock = installMock({}); // manual control — no totalTurns
 
-    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings());
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
     const wait = waitTool(imps);
 
-    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
 
     // Simulate provider exhausting retries after the prompt has started: emits auto_retry_end then resolves
     await waitForPromptStart(mock);
@@ -157,10 +165,10 @@ describe("summon → wait integration", () => {
     const ctx = createMockContext();
     const mock = installMock({ totalTurns: 10, finalText: "long result" });
 
-    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings({ turnLimit: 3 }));
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings({ turnLimit: 3 }));
     const wait = waitTool(imps);
 
-    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
     const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
     const json = parseResult(result);
 
@@ -174,10 +182,10 @@ describe("summon → wait integration", () => {
     const ctx = createMockContext();
     installMock({ totalTurns: 2, perTurnUsage: { input: 100, output: 50 } });
 
-    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings());
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
     const wait = waitTool(imps);
 
-    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
 
     const tokenSnapshots: Array<{ input: number; output: number }> = [];
     const onUpdate = (u: AgentToolResult<{ imps: Array<{ tokens: { input: number; output: number } }> }>) => {
@@ -209,11 +217,11 @@ describe("wait mode=first", () => {
       return { session } as Awaited<ReturnType<typeof createAgentSession>>;
     });
 
-    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings());
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
     const wait = waitTool(imps);
 
-    await summon.execute("tc1", { task: "task A, first thing to do" }, undefined, undefined, ctx);
-    await summon.execute("tc2", { task: "task B, second thing to do" }, undefined, undefined, ctx);
+    await summon.execute("tc1", { task: "task A, first thing to do", agent: "coder" }, undefined, undefined, ctx);
+    await summon.execute("tc2", { task: "task B, second thing to do", agent: "coder" }, undefined, undefined, ctx);
 
     const result = await wait.execute("tc3", { mode: "first" }, undefined, undefined, ctx);
     const json = parseResult(result);
@@ -238,10 +246,10 @@ describe("dismiss", () => {
     const ctx = createMockContext();
     installMock({}); // pending
 
-    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings());
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
     const dismiss = dismissTool(imps, namePool);
 
-    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
     const impRef = imps.get("imp-1");
     if (!impRef) throw new Error("imp-1 not found after summon");
 
@@ -318,27 +326,6 @@ describe("project config tools", () => {
       }),
     );
   });
-
-  it("ephemeral imp: unions settings toolAllowlist with project config '_' tools", async () => {
-    writeFileSync(join(tmpDir, ".pi", "imps.json"), JSON.stringify({ agents: { _: { tools: ["lint"] } } }));
-
-    const imps = new Map();
-    const namePool = makeNamePool();
-    const ctx = createMockContext({ cwd: tmpDir });
-    installMock({ totalTurns: 1 });
-
-    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings({ toolAllowlist: ["read"] }));
-    const wait = waitTool(imps);
-
-    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
-    await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
-
-    expect(vi.mocked(createAgentSession)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.arrayContaining(["read", "lint"]),
-      }),
-    );
-  });
 });
 
 describe("streaming", () => {
@@ -348,10 +335,10 @@ describe("streaming", () => {
     const ctx = createMockContext();
     installMock({ totalTurns: 1 });
 
-    const summon = summonTool(imps, [] as AgentConfig[], namePool, makeSettings());
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
     const wait = waitTool(imps);
 
-    await summon.execute("tc1", { task: "analyze the codebase thoroughly" }, undefined, undefined, ctx);
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
 
     const updates: string[] = [];
     const onUpdate = (u: AgentToolResult<unknown>) => {

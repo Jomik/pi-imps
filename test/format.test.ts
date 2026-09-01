@@ -9,7 +9,7 @@ function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
     resolveDone = r;
   });
   return {
-    agent: undefined,
+    agent: "test-agent",
     task: "test",
     startedAt: Date.now(),
     controller: new AbortController(),
@@ -126,12 +126,6 @@ describe("formatSummonDisplay", () => {
     expect(s).toContain("the");
     expect(s).toContain("has answered your summons!");
   });
-
-  it("ephemeral agent omits agent name", () => {
-    const s = formatSummonDisplay("bob", undefined, theme);
-    expect(s).toContain("bob");
-    expect(s).toContain("has answered your summons!");
-  });
 });
 
 // --- formatWaitDisplay ---
@@ -202,19 +196,5 @@ describe("formatWaitDisplay", () => {
     expect(s).toContain("2⟳");
     expect(s).toContain("4.0k↓");
     expect(s).toContain("4.3k↑");
-  });
-
-  it("first mode with ephemeral omits agent name", () => {
-    const imps = [
-      makeImp({
-        name: "bob",
-        status: "completed",
-        turns: 1,
-        tokens: { input: 250, output: 250 },
-      }),
-    ];
-    const s = formatWaitDisplay(imps, "first", theme);
-    expect(s).toContain("bob");
-    expect(s).toContain("finished first");
   });
 });
