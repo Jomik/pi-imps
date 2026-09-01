@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { buildAgentsBlock, discoverAgents } from "./agents.js";
+import { type AgentDiagnostic, buildAgentsBlock, discoverAgents } from "./agents.js";
 import { createImpsCommand } from "./command.js";
 import { createNamePool } from "./names.js";
 import { loadImpSettings } from "./settings.js";
@@ -17,9 +17,15 @@ export default function (pi: ExtensionAPI): void {
   // ── Agent discovery ────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx) => {
-    const discovered = discoverAgents(ctx.cwd);
+    const diagnostics: AgentDiagnostic[] = [];
+    const discovered = discoverAgents(ctx.cwd, diagnostics);
     agents.splice(0, agents.length, ...discovered);
     agentsBlock = buildAgentsBlock(discovered);
+
+    if (diagnostics.length > 0) {
+      const summary = diagnostics.map((d) => `- ${d.filePath}: ${d.message}`).join("\n");
+      ctx.ui.notify(`pi-imps: ${diagnostics.length} invalid agent definition(s) skipped:\n${summary}`, "warning");
+    }
   });
 
   // ── System prompt injection ────────────────────────────────────────────

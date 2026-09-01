@@ -2,7 +2,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildAgentsBlock, discoverAgents, parseThinkingLevel, parseToolsList, parseTurnLimit } from "../src/agents.js";
+import {
+  type AgentDiagnostic,
+  buildAgentsBlock,
+  discoverAgents,
+  parseThinkingLevel,
+  parseToolsList,
+  parseTurnLimit,
+} from "../src/agents.js";
 import type { AgentConfig } from "../src/types.js";
 
 // Mock getAgentDir so tests never touch the real ~/.pi/agent/agents/ directory.
@@ -35,6 +42,10 @@ describe("parseToolsList", () => {
 
   it("returns empty array for empty YAML array", () => {
     expect(parseToolsList([])).toEqual([]);
+  });
+
+  it("trims whitespace from YAML array string entries", () => {
+    expect(parseToolsList(["  read  ", " bash", "edit  "])).toEqual(["read", "bash", "edit"]);
   });
 
   // Comma-separated string
@@ -278,5 +289,258 @@ describe("discoverAgents", () => {
 
     const agents = discoverAgents(tmpDir);
     expect(agents[0].source).toBe("project");
+  });
+});
+
+// ─── discoverAgents diagnostics ───────────────────────────────────────────────────────────
+
+describe("discoverAgents diagnostics", () => {
+  let tmpDir: string;
+  let projectDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-imps-agents-diag-test-"));
+    projectDir = join(tmpDir, ".pi", "agents");
+    mkdirSync(projectDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeRaw(filename: string, content: string) {
+    writeFileSync(join(projectDir, filename), content);
+  }
+
+  // Table-driven: each case writes one invalid file and expects it excluded
+  // with a diagnostic, while a co-located valid agent still loads.
+  const invalidCases: Array<{ label: string; filename: string; content: string }> = [
+    {
+      label: "malformed YAML frontmatter",
+      filename: "broken.md",
+      content: "---\ndescription: [unclosed\n---\nbody\n",
+    },
+    {
+      label: "missing description",
+      filename: "nodesc.md",
+      content: "---\nname: nodesc\n---\n",
+    },
+    {
+      label: "non-string description",
+      filename: "baddesc.md",
+      content: "---\ndescription: 42\n---\n",
+    },
+    {
+      label: "non-string name",
+      filename: "badname.md",
+      content: "---\ndescription: valid\nname: [1, 2]\n---\n",
+    },
+    {
+      label: "non-string model",
+      filename: "badmodel.md",
+      content: "---\ndescription: valid\nmodel: 5\n---\n",
+    },
+    {
+      label: "invalid thinking level",
+      filename: "badthinking.md",
+      content: "---\ndescription: valid\nthinking: turbo\n---\n",
+    },
+    {
+      label: "invalid turns (below minimum)",
+      filename: "badturns.md",
+      content: "---\ndescription: valid\nturns: 1\n---\n",
+    },
+    {
+      label: "invalid tools (empty string)",
+      filename: "badtools.md",
+      content: "---\ndescription: valid\ntools: ''\n---\n",
+    },
+    {
+      label: "invalid tools (array with non-string entries)",
+      filename: "badtools2.md",
+      content: "---\ndescription: valid\ntools:\n  - read\n  - 5\n---\n",
+    },
+    {
+      label: "blank description",
+      filename: "blankdesc.md",
+      content: "---\ndescription: '   '\n---\n",
+    },
+    {
+      label: "blank name",
+      filename: "blankname.md",
+      content: "---\ndescription: valid\nname: '   '\n---\n",
+    },
+    {
+      label: "blank model",
+      filename: "blankmodel.md",
+      content: "---\ndescription: valid\nmodel: '   '\n---\n",
+    },
+    {
+      label: "blank tools string",
+      filename: "blanktools.md",
+      content: "---\ndescription: valid\ntools: '   '\n---\n",
+    },
+    {
+      label: "tools array with a blank entry",
+      filename: "blanktoolsarr.md",
+      content: "---\ndescription: valid\ntools:\n  - read\n  - '   '\n---\n",
+    },
+    {
+      label: "comma/whitespace-only tools string",
+      filename: "commatools.md",
+      content: "---\ndescription: valid\ntools: ' , '\n---\n",
+    },
+  ];
+
+  it.each(invalidCases)("reports a diagnostic and excludes the definition: $label", ({ filename, content }) => {
+    writeRaw(filename, content);
+    writeRaw("valid.md", "---\ndescription: a valid agent\n---\n");
+
+    const diagnostics: AgentDiagnostic[] = [];
+    const names = discoverAgents(tmpDir, diagnostics).map((a) => a.name);
+
+    expect(names).toEqual(["valid"]);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].filePath).toContain(filename);
+    expect(diagnostics[0].message.length).toBeGreaterThan(0);
+  });
+
+  it("accepts unknown extra frontmatter fields", () => {
+    writeRaw("extra.md", "---\ndescription: valid\nsome_unknown_field: 123\n---\n");
+
+    const diagnostics: AgentDiagnostic[] = [];
+    const names = discoverAgents(tmpDir, diagnostics).map((a) => a.name);
+
+    expect(names).toEqual(["extra"]);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("accepts valid tools as comma-separated string, array, and empty array", () => {
+    writeRaw("tools-str.md", "---\ndescription: valid\ntools: read, edit\n---\n");
+    writeRaw("tools-arr.md", "---\ndescription: valid\ntools:\n  - read\n  - edit\n---\n");
+    writeRaw("tools-empty.md", "---\ndescription: valid\ntools: []\n---\n");
+
+    const diagnostics: AgentDiagnostic[] = [];
+    const names = discoverAgents(tmpDir, diagnostics).map((a) => a.name);
+
+    expect(names.sort()).toEqual(["tools-arr", "tools-empty", "tools-str"]);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("normalizes whitespace in YAML array tool entries when loading", () => {
+    writeRaw("tools-whitespace.md", "---\ndescription: valid\ntools:\n  - '  read  '\n---\n");
+
+    const diagnostics: AgentDiagnostic[] = [];
+    const agents = discoverAgents(tmpDir, diagnostics);
+
+    expect(diagnostics).toEqual([]);
+    expect(agents.find((a) => a.name === "tools-whitespace")?.tools).toEqual(["read"]);
+  });
+
+  it("reports diagnostics for multiple invalid files while valid ones continue loading", () => {
+    writeRaw("bad1.md", "---\ndescription: 1\n---\n");
+    writeRaw("bad2.md", "---\ndescription: valid\nthinking: nope\n---\n");
+    writeRaw("good.md", "---\ndescription: valid\n---\n");
+
+    const diagnostics: AgentDiagnostic[] = [];
+    const names = discoverAgents(tmpDir, diagnostics).map((a) => a.name);
+
+    expect(names).toEqual(["good"]);
+    expect(diagnostics).toHaveLength(2);
+  });
+
+  it("does not require a diagnostics array (backward compatible callers)", () => {
+    writeRaw("bad.md", "---\ndescription: 1\n---\n");
+    writeRaw("good.md", "---\ndescription: valid\n---\n");
+
+    expect(() => discoverAgents(tmpDir)).not.toThrow();
+    expect(discoverAgents(tmpDir).map((a) => a.name)).toEqual(["good"]);
+  });
+
+  it("masks a same-name global agent when the project definition is invalid", async () => {
+    const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+    const agentDir = join(tmpDir, "global-agent-dir");
+    const userAgentsDir = join(agentDir, "agents");
+    mkdirSync(userAgentsDir, { recursive: true });
+    writeFileSync(join(userAgentsDir, "shared.md"), "---\ndescription: global shared agent\n---\n");
+
+    vi.mocked(getAgentDir).mockReturnValueOnce(agentDir);
+
+    writeRaw("shared.md", "---\nname: shared\ndescription: 42\n---\n");
+
+    const diagnostics: AgentDiagnostic[] = [];
+    const names = discoverAgents(tmpDir, diagnostics).map((a) => a.name);
+
+    expect(names).not.toContain("shared");
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it("retains a valid project agent when an invalid project file claims the same name as a global agent", async () => {
+    const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+    const agentDir = join(tmpDir, "global-agent-dir");
+    const userAgentsDir = join(agentDir, "agents");
+    mkdirSync(userAgentsDir, { recursive: true });
+    writeFileSync(join(userAgentsDir, "shared.md"), "---\ndescription: global shared agent\n---\n");
+
+    vi.mocked(getAgentDir).mockReturnValueOnce(agentDir);
+
+    writeRaw("shared.md", "---\nname: shared\ndescription: valid project shared agent\n---\n");
+    writeRaw("shared-invalid.md", "---\nname: shared\ndescription: 42\n---\n");
+
+    const diagnostics: AgentDiagnostic[] = [];
+    const agents = discoverAgents(tmpDir, diagnostics);
+    const shared = agents.find((a) => a.name === "shared");
+
+    expect(shared).toBeDefined();
+    expect(shared?.source).toBe("project");
+    expect(shared?.description).toBe("valid project shared agent");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].filePath).toContain("shared-invalid.md");
+  });
+
+  it("uses filename stem as the claimed name for masking when frontmatter name is invalid", () => {
+    writeRaw("stemname.md", "---\ndescription: valid\nname: 42\n---\n");
+
+    const diagnostics: AgentDiagnostic[] = [];
+    discoverAgents(tmpDir, diagnostics);
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].filePath).toContain("stemname.md");
+  });
+
+  it("uses filename stem as the claimed name for masking when frontmatter name is blank", async () => {
+    const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+    const agentDir = join(tmpDir, "global-agent-dir-blank");
+    const userAgentsDir = join(agentDir, "agents");
+    mkdirSync(userAgentsDir, { recursive: true });
+    writeFileSync(join(userAgentsDir, "blankname.md"), "---\ndescription: global agent\n---\n");
+
+    vi.mocked(getAgentDir).mockReturnValueOnce(agentDir);
+
+    writeRaw("blankname.md", "---\ndescription: valid\nname: '   '\n---\n");
+
+    const diagnostics: AgentDiagnostic[] = [];
+    const names = discoverAgents(tmpDir, diagnostics).map((a) => a.name);
+
+    expect(names).not.toContain("blankname");
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it("reports a diagnostic and returns no agents when the directory cannot be read", async () => {
+    const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+    const agentDir = join(tmpDir, "global-agent-dir-unreadable");
+    mkdirSync(agentDir, { recursive: true });
+    // Make the expected agents-directory path an ordinary file so readdirSync throws ENOTDIR.
+    writeFileSync(join(agentDir, "agents"), "not a directory");
+
+    vi.mocked(getAgentDir).mockReturnValueOnce(agentDir);
+
+    const diagnostics: AgentDiagnostic[] = [];
+    const names = discoverAgents(tmpDir, diagnostics).map((a) => a.name);
+
+    expect(names).toEqual([]);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].filePath).toContain(join(agentDir, "agents"));
+    expect(diagnostics[0].message.length).toBeGreaterThan(0);
   });
 });

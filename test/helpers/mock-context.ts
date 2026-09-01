@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { vi } from "vitest";
 
 const mockModel = { id: "mock", name: "mock", api: { id: "mock" } } as unknown as Model<Api>;
 
@@ -10,6 +11,7 @@ export function createMockContext(overrides?: Partial<ExtensionContext>): Extens
     modelRegistry: {
       getAvailable: () => [mockModel],
     } as unknown as ModelRegistry,
+    ui: { notify: vi.fn() },
     ...overrides,
   } as ExtensionContext;
 }
