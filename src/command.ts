@@ -6,22 +6,81 @@ import type { AgentConfig, ImpSettings } from "./types.js";
 const USAGE = "/imps tools <agent-name>";
 
 /**
- * Partition visible tools into the Granted and Available columns.
+ * Compute the source badges that apply to a tool, in stable display order.
  *
- * - Granted: tools present in globalTools (read-only) or projectTools (removable)
- * - Available: all other visible tools
+ * Sources are mutually exclusive in pairs: `agent` and `default` cannot both
+ * appear (the agent either has explicit frontmatter tools or falls back to the
+ * default). `global` and `project` are independent and may combine with either
+ * baseline source.
+ *
+ * Returns an array such as ["agent", "global"] or ["default", "project"],
+ * or [] if the tool has no source (i.e. it belongs in Available).
  *
  * Exported for testing.
  */
+export function computeBadges(
+  toolName: string,
+  agentTools: ReadonlySet<string>,
+  defaultTools: ReadonlySet<string>,
+  globalTools: ReadonlySet<string>,
+  projectTools: ReadonlySet<string>,
+): string[] {
+  const badges: string[] = [];
+  if (agentTools.has(toolName)) badges.push("agent");
+  if (defaultTools.has(toolName)) badges.push("default");
+  if (globalTools.has(toolName)) badges.push("global");
+  if (projectTools.has(toolName)) badges.push("project");
+  return badges;
+}
+
+/**
+ * Compute the agent and default tool source sets for a given agent and settings.
+ *
+ * - `agentTools`: tools from the agent's frontmatter `tools` field (set when defined).
+ *   Empty set when the agent has no frontmatter tools (undefined) or explicitly empty ([]).
+ * - `defaultTools`: the baseline fallback when `agent.tools` is undefined.
+ *   Populated from `settings.toolAllowlist` when defined, otherwise from `allToolNames` (all tools).
+ *   Empty set when the agent has explicit frontmatter tools (including explicit empty []).
+ *
+ * These two sets are mutually exclusive — if the agent defines its own tools list,
+ * `defaultTools` is always empty.
+ *
+ * Exported for testing.
+ */
+export function computeBaseToolSources(
+  agent: AgentConfig,
+  settings: ImpSettings,
+  allToolNames: readonly string[],
+): { agentTools: Set<string>; defaultTools: Set<string> } {
+  if (agent.tools !== undefined) {
+    // Agent has explicit frontmatter tools (possibly empty []).
+    return { agentTools: new Set(agent.tools), defaultTools: new Set() };
+  }
+  // No frontmatter tools — use settings toolAllowlist or all tools.
+  const defaultTools = settings.toolAllowlist !== undefined ? new Set(settings.toolAllowlist) : new Set(allToolNames);
+  return { agentTools: new Set(), defaultTools };
+}
+
+/**
+ * Partition all registered tool names into the Granted and Available columns.
+ *
+ * - Granted: tools present in any of agentTools, defaultTools, globalTools, or projectTools.
+ * - Available: all other tools.
+ *
+ * Every tool in `allToolNames` appears exactly once across the two columns.
+ * Exported for testing.
+ */
 export function partitionTools(
-  visibleToolNames: string[],
+  allToolNames: string[],
+  agentTools: ReadonlySet<string>,
+  defaultTools: ReadonlySet<string>,
   globalTools: ReadonlySet<string>,
   projectTools: ReadonlySet<string>,
 ): { granted: string[]; available: string[] } {
   const granted: string[] = [];
   const available: string[] = [];
-  for (const name of visibleToolNames) {
-    if (globalTools.has(name) || projectTools.has(name)) {
+  for (const name of allToolNames) {
+    if (agentTools.has(name) || defaultTools.has(name) || globalTools.has(name) || projectTools.has(name)) {
       granted.push(name);
     } else {
       available.push(name);
@@ -49,33 +108,36 @@ export function computeGrantResult(
 /**
  * Compute the tools array to persist after revoking a project-granted tool.
  *
- * Returns null if the tool is globally granted (read-only — caller must not mutate).
+ * Returns null when the tool has no project source (inherited-only — read-only).
  * Pure — does not mutate currentProjectTools. Includes unknown preserved tools.
  * Exported for testing.
  */
 export function computeRevokeResult(
   toolName: string,
-  globalTools: ReadonlySet<string>,
   currentProjectTools: ReadonlySet<string>,
   unknownProjectTools: readonly string[],
 ): string[] | null {
-  if (globalTools.has(toolName)) return null;
+  if (!currentProjectTools.has(toolName)) return null; // no project source — read-only
   const updated = new Set(currentProjectTools);
   updated.delete(toolName);
   return [...updated, ...unknownProjectTools];
 }
 
-function buildGrantedItem(toolName: string, globalTools: ReadonlySet<string>): SettingItem {
-  if (globalTools.has(toolName)) {
-    return {
-      id: toolName,
-      label: toolName,
-      description: "Granted via global settings (read-only)",
-      currentValue: "global",
-      values: ["global"],
-    };
-  }
-  return { id: toolName, label: toolName, currentValue: "", values: [""] };
+function buildGrantedItem(
+  toolName: string,
+  agentTools: ReadonlySet<string>,
+  defaultTools: ReadonlySet<string>,
+  globalTools: ReadonlySet<string>,
+  projectTools: ReadonlySet<string>,
+): SettingItem {
+  const badges = computeBadges(toolName, agentTools, defaultTools, globalTools, projectTools);
+  const badgeText = badges.map((b) => `[${b}]`).join(" ");
+  return {
+    id: toolName,
+    label: toolName,
+    currentValue: badgeText,
+    values: [badgeText],
+  };
 }
 
 function buildAvailableItem(toolName: string): SettingItem {
@@ -85,8 +147,14 @@ function buildAvailableItem(toolName: string): SettingItem {
 /**
  * Side-by-side two-pane tool picker.
  *
- * Left column (Granted): globally-granted tools (read-only) and project-granted tools
- * (Enter removes). Right column (Available): tools not yet granted (Enter grants).
+ * Left column (Granted): tools with any source (agent, default, global, project).
+ * Right column (Available): tools with no source.
+ *
+ * Only the `project` source is editable:
+ * - Enter on Available adds a project grant and moves it to Granted.
+ * - Enter on Granted with a project source removes only that source; a project-only
+ *   tool moves to Available, while a multi-source tool remains Granted with updated badges.
+ * - Enter on Granted without a project source is a no-op (inherited-only — read-only).
  *
  * Left/right arrows and Tab switch the active column. Up/down, typing, and Enter are
  * routed to the active SettingsList. Escape closes from the active list.
@@ -100,7 +168,9 @@ export class TwoPaneToolPicker {
   private activeColumn: 0 | 1; // 0 = Granted, 1 = Available
 
   constructor(
-    private readonly visibleToolNames: string[],
+    private readonly allToolNames: string[],
+    private readonly agentTools: ReadonlySet<string>,
+    private readonly defaultTools: ReadonlySet<string>,
     private readonly globalTools: ReadonlySet<string>,
     private readonly currentProjectTools: Set<string>,
     private readonly unknownProjectTools: readonly string[],
@@ -109,26 +179,29 @@ export class TwoPaneToolPicker {
     private readonly onPersist: (tools: string[]) => boolean,
     private readonly onDone: () => void,
   ) {
-    const { granted, available } = partitionTools(visibleToolNames, globalTools, currentProjectTools);
+    const { granted, available } = partitionTools(
+      allToolNames,
+      agentTools,
+      defaultTools,
+      globalTools,
+      currentProjectTools,
+    );
     this.activeColumn = available.length > 0 ? 1 : 0;
     this.grantedList = this.buildGrantedList(granted);
     this.availableList = this.buildAvailableList(available);
   }
 
   private buildGrantedList(grantedToolNames: string[]): SettingsList {
-    const items = grantedToolNames.map((name) => buildGrantedItem(name, this.globalTools));
+    const items = grantedToolNames.map((name) =>
+      buildGrantedItem(name, this.agentTools, this.defaultTools, this.globalTools, this.currentProjectTools),
+    );
     return new SettingsList(
       items,
       this.maxVisible,
       this.theme,
       (id, _newValue) => {
-        const toolsToWrite = computeRevokeResult(
-          id,
-          this.globalTools,
-          this.currentProjectTools,
-          this.unknownProjectTools,
-        );
-        if (toolsToWrite === null) return; // globally granted — read-only
+        const toolsToWrite = computeRevokeResult(id, this.currentProjectTools, this.unknownProjectTools);
+        if (toolsToWrite === null) return; // inherited-only — read-only
         if (this.onPersist(toolsToWrite) === false) return;
         this.currentProjectTools.delete(id);
         this.rebuildLists();
@@ -157,7 +230,13 @@ export class TwoPaneToolPicker {
 
   private rebuildLists(): void {
     // ponytail: rebuilding resets search and selection after a move; preserve them if this proves disruptive.
-    const { granted, available } = partitionTools(this.visibleToolNames, this.globalTools, this.currentProjectTools);
+    const { granted, available } = partitionTools(
+      this.allToolNames,
+      this.agentTools,
+      this.defaultTools,
+      this.globalTools,
+      this.currentProjectTools,
+    );
     this.grantedList = this.buildGrantedList(granted);
     this.availableList = this.buildAvailableList(available);
     // Keep current column; switch if it becomes empty while the other is not.
@@ -306,39 +385,42 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
         return;
       }
 
-      const frontmatterTools = new Set<string>(agent.tools ?? []);
-      const globalTools = new Set<string>(settings.agents[agentName]?.tools ?? []);
-      const existingProjectToolNames = projectConfig.agents?.[agentName]?.tools ?? [];
       const allToolNames = pi
         .getAllTools()
         .map((t) => t.name)
         .sort();
 
-      // Tools in agent frontmatter are already configured — hide them from the picker.
-      // Global grants that are also in frontmatter are hidden for the same reason.
-      const visibleToolNames = allToolNames.filter((t) => !frontmatterTools.has(t));
+      // Compute the agent and default tool source sets.
+      const { agentTools, defaultTools } = computeBaseToolSources(agent, settings, allToolNames);
 
-      // Tools in the project config that are not in the visible list — either
-      // unregistered or already covered by agent frontmatter — are preserved on
-      // every write so they are not silently dropped.
-      const unknownProjectTools = existingProjectToolNames.filter((t) => !visibleToolNames.includes(t));
+      // Global grants: per-agent tools from global imps.json settings.
+      const globalTools = new Set<string>(settings.agents[agentName]?.tools ?? []);
 
-      // Mutable set tracking which visible tools are currently project-granted.
-      const currentProjectTools = new Set<string>(existingProjectToolNames.filter((t) => visibleToolNames.includes(t)));
+      const existingProjectToolNames = projectConfig.agents?.[agentName]?.tools ?? [];
 
-      const maxVisible = Math.min(visibleToolNames.length + 2, 20);
+      // Unknown project tools: names in the project config that are not registered in this
+      // session. Preserved verbatim on every write so they are not silently dropped.
+      const unknownProjectTools = existingProjectToolNames.filter((t) => !allToolNames.includes(t));
+
+      // Mutable set tracking which registered tools are currently project-granted.
+      const currentProjectTools = new Set<string>(existingProjectToolNames.filter((t) => allToolNames.includes(t)));
+
+      const maxVisible = Math.min(allToolNames.length + 2, 20);
 
       await ctx.ui.custom((tui, _theme, _kb, done) => {
         const theme = getSettingsListTheme();
 
         const headerText = new Text(
           `Project tool grants for agent: ${agentName}\n` +
-            `Project grants are additive — removing a project grant cannot remove access provided by frontmatter or global settings. Grants have no effect when the agent's base already allows all tools (no frontmatter tools and no global toolAllowlist).\n` +
+            `Source badges: [agent] = frontmatter tools · [default] = fallback baseline (toolAllowlist or all tools) · [global] = global settings · [project] = this project\n` +
+            `Only [project] grants are editable here. Removing a project grant cannot revoke access provided by another source.\n` +
             `Controls: ← → or Tab to switch column · Enter/Space to move tool · ↑ ↓ / type to navigate · Esc to close\n`,
         );
 
         const picker = new TwoPaneToolPicker(
-          visibleToolNames,
+          allToolNames,
+          agentTools,
+          defaultTools,
           globalTools,
           currentProjectTools,
           unknownProjectTools,

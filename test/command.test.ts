@@ -5,6 +5,8 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type SettingsListTheme, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  computeBadges,
+  computeBaseToolSources,
   computeGrantResult,
   computeRevokeResult,
   createImpsCommand,
@@ -25,12 +27,24 @@ function makeAgents(...names: string[]): AgentConfig[] {
   }));
 }
 
-function makeSettings(agentTools: Record<string, string[]> = {}): ImpSettings {
+/** Make an AgentConfig with explicit frontmatter tools. */
+function makeAgentWithTools(name: string, tools: string[]): AgentConfig {
+  return {
+    name,
+    description: `Agent ${name}`,
+    systemPrompt: "",
+    source: "user" as const,
+    filePath: `/agents/${name}.md`,
+    tools,
+  };
+}
+
+function makeSettings(agentTools: Record<string, string[]> = {}, toolAllowlist?: string[]): ImpSettings {
   const agents: Record<string, { tools?: string[] }> = {};
   for (const [k, v] of Object.entries(agentTools)) {
     agents[k] = { tools: v };
   }
-  return { turnLimit: 30, toolAllowlist: undefined, additionalExtensions: [], agents };
+  return { turnLimit: 30, toolAllowlist, additionalExtensions: [], agents };
 }
 
 /** Minimal ExtensionAPI stub — only exposes methods used by createImpsCommand. */
@@ -82,55 +96,195 @@ const plainTheme: SettingsListTheme = {
 /** Minimal no-op onPersist callback indicating success. */
 const persistOk = (): true => true;
 
+// ─── computeBadges ────────────────────────────────────────────────────────────
+
+describe("computeBadges", () => {
+  it("returns [agent] when tool is in agentTools", () => {
+    expect(computeBadges("read", new Set(["read"]), new Set(), new Set(), new Set())).toEqual(["agent"]);
+  });
+
+  it("returns [default] when tool is in defaultTools", () => {
+    expect(computeBadges("read", new Set(), new Set(["read"]), new Set(), new Set())).toEqual(["default"]);
+  });
+
+  it("returns [global] when tool is in globalTools", () => {
+    expect(computeBadges("read", new Set(), new Set(), new Set(["read"]), new Set())).toEqual(["global"]);
+  });
+
+  it("returns [project] when tool is in projectTools", () => {
+    expect(computeBadges("read", new Set(), new Set(), new Set(), new Set(["read"]))).toEqual(["project"]);
+  });
+
+  it("returns [] when tool has no source", () => {
+    expect(computeBadges("read", new Set(), new Set(), new Set(), new Set())).toEqual([]);
+  });
+
+  it("returns badges in stable order: agent, global, project", () => {
+    const badges = computeBadges(
+      "tool-x",
+      new Set(["tool-x"]), // agent
+      new Set(), // default
+      new Set(["tool-x"]), // global
+      new Set(["tool-x"]), // project
+    );
+    expect(badges).toEqual(["agent", "global", "project"]);
+  });
+
+  it("returns badges in stable order: default, global, project", () => {
+    const badges = computeBadges(
+      "tool-x",
+      new Set(), // agent
+      new Set(["tool-x"]), // default
+      new Set(["tool-x"]), // global
+      new Set(["tool-x"]), // project
+    );
+    expect(badges).toEqual(["default", "global", "project"]);
+  });
+
+  it("agent and default are mutually exclusive: only agent appears when both could apply", () => {
+    // In practice, computeBaseToolSources ensures they cannot both be set,
+    // but computeBadges itself doesn't enforce that. Test the expected case:
+    // when agent tools are present, only agent badge shows (no default).
+    const badges = computeBadges("x", new Set(["x"]), new Set(), new Set(), new Set());
+    expect(badges).not.toContain("default");
+    expect(badges).toContain("agent");
+  });
+
+  it("returns [agent, global] for tool in both agent frontmatter and global settings", () => {
+    const badges = computeBadges("read", new Set(["read"]), new Set(), new Set(["read"]), new Set());
+    expect(badges).toEqual(["agent", "global"]);
+  });
+
+  it("returns [default, project] for tool in default baseline and project grants", () => {
+    const badges = computeBadges("bash", new Set(), new Set(["bash"]), new Set(), new Set(["bash"]));
+    expect(badges).toEqual(["default", "project"]);
+  });
+});
+
+// ─── computeBaseToolSources ──────────────────────────────────────────────────
+
+describe("computeBaseToolSources", () => {
+  const allTools = ["read", "bash", "grep", "write"];
+
+  it("uses agentTools from frontmatter when tools are explicitly defined", () => {
+    const agent = makeAgentWithTools("mason", ["read", "bash"]);
+    const settings = makeSettings();
+    const { agentTools, defaultTools } = computeBaseToolSources(agent, settings, allTools);
+    expect([...agentTools].sort()).toEqual(["bash", "read"]);
+    expect(defaultTools.size).toBe(0);
+  });
+
+  it("uses defaultTools from toolAllowlist when agent has no frontmatter tools", () => {
+    const agent = makeAgents("mason")[0];
+    const settings = makeSettings({}, ["read", "grep"]);
+    const { agentTools, defaultTools } = computeBaseToolSources(agent, settings, allTools);
+    expect(agentTools.size).toBe(0);
+    expect([...defaultTools].sort()).toEqual(["grep", "read"]);
+  });
+
+  it("uses all tools as defaultTools when agent has no frontmatter and no toolAllowlist", () => {
+    const agent = makeAgents("mason")[0];
+    const settings = makeSettings();
+    const { agentTools, defaultTools } = computeBaseToolSources(agent, settings, allTools);
+    expect(agentTools.size).toBe(0);
+    expect([...defaultTools].sort()).toEqual([...allTools].sort());
+  });
+
+  it("uses empty agentTools and empty defaultTools for explicit empty frontmatter tools: []", () => {
+    const agent = makeAgentWithTools("mason", []); // explicit tools: []
+    const settings = makeSettings({}, ["read", "grep"]); // allowlist present but ignored
+    const { agentTools, defaultTools } = computeBaseToolSources(agent, settings, allTools);
+    expect(agentTools.size).toBe(0);
+    expect(defaultTools.size).toBe(0);
+  });
+
+  it("agentTools and defaultTools are mutually exclusive", () => {
+    const agentWithTools = makeAgentWithTools("mason", ["read"]);
+    const agentWithoutTools = makeAgents("mason")[0];
+    const settings = makeSettings({}, ["bash"]);
+
+    const { agentTools: at1, defaultTools: dt1 } = computeBaseToolSources(agentWithTools, settings, allTools);
+    expect(at1.size).toBeGreaterThan(0);
+    expect(dt1.size).toBe(0);
+
+    const { agentTools: at2, defaultTools: dt2 } = computeBaseToolSources(agentWithoutTools, settings, allTools);
+    expect(at2.size).toBe(0);
+    expect(dt2.size).toBeGreaterThan(0);
+  });
+});
+
 // ─── partitionTools ──────────────────────────────────────────────────────────
 
 describe("partitionTools", () => {
+  it("puts tools in Granted when they have an agent source", () => {
+    const { granted, available } = partitionTools(["a", "b", "c"], new Set(["a"]), new Set(), new Set(), new Set());
+    expect(granted).toContain("a");
+    expect(available).not.toContain("a");
+  });
+
+  it("puts tools in Granted when they have a default source", () => {
+    const { granted, available } = partitionTools(["a", "b", "c"], new Set(), new Set(["b"]), new Set(), new Set());
+    expect(granted).toContain("b");
+    expect(available).not.toContain("b");
+  });
+
   it("puts globally-granted tools in granted column", () => {
-    const { granted, available } = partitionTools(["a", "b", "c"], new Set(["a"]), new Set());
+    const { granted, available } = partitionTools(["a", "b", "c"], new Set(), new Set(), new Set(["a"]), new Set());
     expect(granted).toContain("a");
     expect(available).not.toContain("a");
   });
 
   it("puts project-granted tools in granted column", () => {
-    const { granted, available } = partitionTools(["a", "b", "c"], new Set(), new Set(["b"]));
+    const { granted, available } = partitionTools(["a", "b", "c"], new Set(), new Set(), new Set(), new Set(["b"]));
     expect(granted).toContain("b");
     expect(available).not.toContain("b");
   });
 
   it("puts remaining tools in available column", () => {
-    const { available } = partitionTools(["a", "b", "c"], new Set(["a"]), new Set(["b"]));
+    const { available } = partitionTools(["a", "b", "c"], new Set(["a"]), new Set(), new Set(), new Set(["b"]));
     expect(available).toEqual(["c"]);
   });
 
-  it("tool in both global and project lands in granted once", () => {
-    const { granted, available } = partitionTools(["a"], new Set(["a"]), new Set(["a"]));
+  it("tool in multiple sources lands in granted once (one-row invariant)", () => {
+    const { granted, available } = partitionTools(["a"], new Set(["a"]), new Set(), new Set(["a"]), new Set(["a"]));
     expect(granted).toEqual(["a"]);
     expect(available).toEqual([]);
   });
 
   it("returns empty granted when no grants", () => {
-    const { granted, available } = partitionTools(["a", "b"], new Set(), new Set());
+    const { granted, available } = partitionTools(["a", "b"], new Set(), new Set(), new Set(), new Set());
     expect(granted).toEqual([]);
     expect(available).toEqual(["a", "b"]);
   });
 
-  it("returns empty available when all tools are granted", () => {
-    const { granted, available } = partitionTools(["a", "b"], new Set(["a"]), new Set(["b"]));
+  it("returns empty available when all tools have sources", () => {
+    const { granted, available } = partitionTools(["a", "b"], new Set(["a"]), new Set(), new Set(), new Set(["b"]));
     expect(granted).toEqual(["a", "b"]);
     expect(available).toEqual([]);
   });
 
   it("preserves order from input array", () => {
-    const { granted, available } = partitionTools(["c", "a", "b"], new Set(["a"]), new Set(["c"]));
-    expect(granted).toEqual(["c", "a"]); // order of visibleToolNames
+    const { granted, available } = partitionTools(
+      ["c", "a", "b"],
+      new Set(["a"]),
+      new Set(),
+      new Set(),
+      new Set(["c"]),
+    );
+    expect(granted).toEqual(["c", "a"]); // order of allToolNames
     expect(available).toEqual(["b"]);
   });
 
-  it("does not include tools omitted before calling (frontmatter filtering)", () => {
-    // The handler filters frontmatter tools from visibleToolNames before calling partitionTools.
-    const visible = ["bash", "write"]; // "read" already removed by handler
-    const { granted, available } = partitionTools(visible, new Set(), new Set());
-    expect([...granted, ...available]).not.toContain("read");
+  it("every tool appears exactly once across granted and available", () => {
+    const allTools = ["a", "b", "c", "d", "e"];
+    const { granted, available } = partitionTools(
+      allTools,
+      new Set(["a"]),
+      new Set(["b"]),
+      new Set(["c"]),
+      new Set(["d"]),
+    );
+    expect([...granted, ...available].sort()).toEqual(allTools);
   });
 });
 
@@ -170,43 +324,51 @@ describe("computeGrantResult", () => {
 
 describe("computeRevokeResult", () => {
   it("removes the tool from the write list", () => {
-    const result = computeRevokeResult("tool-a", new Set(), new Set(["tool-a"]), []);
+    const result = computeRevokeResult("tool-a", new Set(["tool-a"]), []);
     expect(result).not.toBeNull();
     expect(result).not.toContain("tool-a");
   });
 
-  it("returns null for a globally granted tool (read-only)", () => {
-    const result = computeRevokeResult("tool-a", new Set(["tool-a"]), new Set(["tool-a"]), []);
+  it("returns null when tool has no project source (inherited-only — read-only)", () => {
+    // Tool exists in other sources (agent/default/global) but NOT in currentProjectTools.
+    const result = computeRevokeResult("tool-a", new Set(), []); // not in project
     expect(result).toBeNull();
   });
 
+  it("allows revoking a tool that is also in global/agent sources (removes only project)", () => {
+    // A multi-source tool can still be revoked from the project.
+    const result = computeRevokeResult("tool-a", new Set(["tool-a"]), []);
+    expect(result).not.toBeNull();
+    expect(result).not.toContain("tool-a");
+  });
+
   it("keeps other project tools in the result", () => {
-    const result = computeRevokeResult("tool-a", new Set(), new Set(["tool-a", "tool-b"]), []);
+    const result = computeRevokeResult("tool-a", new Set(["tool-a", "tool-b"]), []);
     expect(result).not.toContain("tool-a");
     expect(result).toContain("tool-b");
   });
 
   it("includes unknown preserved tools in the result", () => {
-    const result = computeRevokeResult("tool-a", new Set(), new Set(["tool-a"]), ["unknown"]);
+    const result = computeRevokeResult("tool-a", new Set(["tool-a"]), ["unknown"]);
     expect(result).toContain("unknown");
   });
 
-  it("preserves frontmatter-filtered project tools via unknown path", () => {
-    // "read" is in frontmatter — filtered from visible, passed as unknownProjectTools.
-    // Revoking "bash" must still preserve "read" in the write list.
-    const result = computeRevokeResult("bash", new Set(), new Set(["bash"]), ["read"]);
+  it("preserves unregistered project tool names via unknown path", () => {
+    // "future-tool" is not registered in the session — in unknownProjectTools.
+    // Revoking "bash" must still preserve "future-tool" in the write list.
+    const result = computeRevokeResult("bash", new Set(["bash"]), ["future-tool"]);
     expect(result).not.toContain("bash");
-    expect(result).toContain("read");
+    expect(result).toContain("future-tool");
   });
 
   it("returns empty array when last project tool is removed", () => {
-    const result = computeRevokeResult("tool-a", new Set(), new Set(["tool-a"]), []);
+    const result = computeRevokeResult("tool-a", new Set(["tool-a"]), []);
     expect(result).toEqual([]);
   });
 
   it("does not mutate currentProjectTools", () => {
     const set = new Set(["tool-a"]);
-    computeRevokeResult("tool-a", new Set(), set, []);
+    computeRevokeResult("tool-a", set, []);
     expect(set.has("tool-a")).toBe(true);
   });
 });
@@ -215,30 +377,196 @@ describe("computeRevokeResult", () => {
 
 describe("TwoPaneToolPicker render", () => {
   it("renders both Granted and Available column headers", () => {
-    const picker = new TwoPaneToolPicker(["a", "b"], new Set(), new Set(), [], plainTheme, 10, persistOk, () => {});
+    const picker = new TwoPaneToolPicker(
+      ["a", "b"],
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      10,
+      persistOk,
+      () => {},
+    );
     const lines = picker.render(60);
     expect(lines[0]).toContain("Granted");
     expect(lines[0]).toContain("Available");
   });
 
   it("marks Available as active by default when available is non-empty", () => {
-    const picker = new TwoPaneToolPicker(["a"], new Set(), new Set(), [], plainTheme, 10, persistOk, () => {});
+    const picker = new TwoPaneToolPicker(
+      ["a"],
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      10,
+      persistOk,
+      () => {},
+    );
     const lines = picker.render(60);
     expect(lines[0]).toContain("▶ Available");
     expect(lines[0]).not.toContain("▶ Granted");
   });
 
   it("marks Granted as active by default when available is empty", () => {
-    // All tools are globally granted → available is empty
-    const picker = new TwoPaneToolPicker(["a"], new Set(["a"]), new Set(), [], plainTheme, 10, persistOk, () => {});
+    // All tools are agent-granted → available is empty
+    const picker = new TwoPaneToolPicker(
+      ["a"],
+      new Set(["a"]),
+      new Set(),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      10,
+      persistOk,
+      () => {},
+    );
     const lines = picker.render(60);
     expect(lines[0]).toContain("▶ Granted");
     expect(lines[0]).not.toContain("▶ Available");
   });
 
+  it("renders [agent] badge for a tool with agent source", () => {
+    const picker = new TwoPaneToolPicker(
+      ["read"],
+      new Set(["read"]),
+      new Set(),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      10,
+      persistOk,
+      () => {},
+    );
+    const lines = picker.render(60);
+    expect(lines.join("\n")).toContain("[agent]");
+  });
+
+  it("renders [default] badge for a tool with default source", () => {
+    const picker = new TwoPaneToolPicker(
+      ["bash"],
+      new Set(),
+      new Set(["bash"]),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      10,
+      persistOk,
+      () => {},
+    );
+    const lines = picker.render(60);
+    expect(lines.join("\n")).toContain("[default]");
+  });
+
+  it("renders [global] badge for a tool with global source", () => {
+    const picker = new TwoPaneToolPicker(
+      ["bash"],
+      new Set(),
+      new Set(),
+      new Set(["bash"]),
+      new Set(),
+      [],
+      plainTheme,
+      10,
+      persistOk,
+      () => {},
+    );
+    const lines = picker.render(60);
+    expect(lines.join("\n")).toContain("[global]");
+  });
+
+  it("renders [project] badge for a tool with project source", () => {
+    const picker = new TwoPaneToolPicker(
+      ["bash"],
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(["bash"]),
+      [],
+      plainTheme,
+      10,
+      persistOk,
+      () => {},
+    );
+    const lines = picker.render(60);
+    expect(lines.join("\n")).toContain("[project]");
+  });
+
+  it("renders multiple badges for a tool with multiple sources", () => {
+    const picker = new TwoPaneToolPicker(
+      ["bash"],
+      new Set(),
+      new Set(),
+      new Set(["bash"]),
+      new Set(["bash"]),
+      [],
+      plainTheme,
+      10,
+      persistOk,
+      () => {},
+    );
+    const rendered = lines_with_text(picker.render(60), "bash");
+    expect(rendered.join("\n")).toContain("[global]");
+    expect(rendered.join("\n")).toContain("[project]");
+  });
+
+  it("renders badges in stable order: agent before global before project", () => {
+    const picker = new TwoPaneToolPicker(
+      ["tool-x"],
+      new Set(["tool-x"]),
+      new Set(),
+      new Set(["tool-x"]),
+      new Set(["tool-x"]),
+      [],
+      plainTheme,
+      10,
+      persistOk,
+      () => {},
+    );
+    const rendered = picker.render(80).join("\n");
+    const agentPos = rendered.indexOf("[agent]");
+    const globalPos = rendered.indexOf("[global]");
+    const projectPos = rendered.indexOf("[project]");
+    expect(agentPos).toBeGreaterThanOrEqual(0);
+    expect(globalPos).toBeGreaterThan(agentPos);
+    expect(projectPos).toBeGreaterThan(globalPos);
+  });
+
+  it("Available tools have no badge text", () => {
+    const picker = new TwoPaneToolPicker(
+      ["a", "b"],
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      10,
+      persistOk,
+      () => {},
+    );
+    // Switch to available column so we can verify items
+    const lines = picker.render(60);
+    // Lines after the header — the Available column (right side) should not contain brackets
+    // This is a coarse check: the Available items should not contain any [badge] text
+    const allText = lines.slice(1).join("\n");
+    // Available items have empty currentValue — no badge brackets
+    // Only way brackets appear is in Granted column which is empty here
+    expect(allText).not.toContain("[");
+  });
+
   it("all rendered lines are <= the requested width", () => {
     const picker = new TwoPaneToolPicker(
       ["tool-alpha", "tool-beta", "tool-gamma", "tool-delta"],
+      new Set(),
+      new Set(),
       new Set(["tool-alpha"]),
       new Set(["tool-beta"]),
       [],
@@ -259,6 +587,8 @@ describe("TwoPaneToolPicker render", () => {
       ["very-long-tool-name-here", "another-extremely-long-tool-name"],
       new Set(),
       new Set(),
+      new Set(),
+      new Set(),
       [],
       plainTheme,
       10,
@@ -277,6 +607,8 @@ describe("TwoPaneToolPicker render", () => {
     const picker = new TwoPaneToolPicker(
       tools,
       new Set(["read"]),
+      new Set(),
+      new Set(),
       new Set(["bash"]),
       [],
       plainTheme,
@@ -293,11 +625,27 @@ describe("TwoPaneToolPicker render", () => {
   });
 });
 
+/** Helper: return lines from a render output that visibly contain the given text. */
+function lines_with_text(lines: string[], text: string): string[] {
+  return lines.filter((l) => l.includes(text));
+}
+
 // ─── TwoPaneToolPicker input ──────────────────────────────────────────────────
 
 describe("TwoPaneToolPicker input", () => {
   it("Tab switches active column from Available to Granted", () => {
-    const picker = new TwoPaneToolPicker(["a"], new Set(), new Set(), [], plainTheme, 5, persistOk, () => {});
+    const picker = new TwoPaneToolPicker(
+      ["a"],
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      5,
+      persistOk,
+      () => {},
+    );
     // Available is active by default (non-empty)
     expect(picker.render(60)[0]).toContain("▶ Available");
     picker.handleInput("\t");
@@ -305,7 +653,18 @@ describe("TwoPaneToolPicker input", () => {
   });
 
   it("Tab switches active column from Granted back to Available", () => {
-    const picker = new TwoPaneToolPicker(["a"], new Set(), new Set(), [], plainTheme, 5, persistOk, () => {});
+    const picker = new TwoPaneToolPicker(
+      ["a"],
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      5,
+      persistOk,
+      () => {},
+    );
     picker.handleInput("\t"); // → Granted
     picker.handleInput("\t"); // → Available again
     expect(picker.render(60)[0]).toContain("▶ Available");
@@ -314,8 +673,10 @@ describe("TwoPaneToolPicker input", () => {
   it("right arrow switches to Available column", () => {
     const picker = new TwoPaneToolPicker(
       ["a"],
-      new Set(["a"]), // all global → no available → Granted is default
+      new Set(["a"]),
       new Set(),
+      new Set(),
+      new Set(), // all agent → no available → Granted is default
       [],
       plainTheme,
       5,
@@ -328,14 +689,36 @@ describe("TwoPaneToolPicker input", () => {
   });
 
   it("left arrow switches to Granted column", () => {
-    const picker = new TwoPaneToolPicker(["a"], new Set(), new Set(), [], plainTheme, 5, persistOk, () => {});
+    const picker = new TwoPaneToolPicker(
+      ["a"],
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      5,
+      persistOk,
+      () => {},
+    );
     // Available is active by default
     picker.handleInput("\x1b[D"); // left arrow
     expect(picker.render(60)[0]).toContain("▶ Granted");
   });
 
   it("alternate left/right arrow sequences (\\x1bOC/D) also switch columns", () => {
-    const picker = new TwoPaneToolPicker(["a"], new Set(), new Set(), [], plainTheme, 5, persistOk, () => {});
+    const picker = new TwoPaneToolPicker(
+      ["a"],
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      5,
+      persistOk,
+      () => {},
+    );
     picker.handleInput("\x1bOD"); // alternate left
     expect(picker.render(60)[0]).toContain("▶ Granted");
     picker.handleInput("\x1bOC"); // alternate right
@@ -347,6 +730,8 @@ describe("TwoPaneToolPicker input", () => {
     const persisted: string[][] = [];
     const picker = new TwoPaneToolPicker(
       ["tool-a"],
+      new Set(),
+      new Set(),
       new Set(),
       projectTools,
       [],
@@ -371,6 +756,8 @@ describe("TwoPaneToolPicker input", () => {
     const picker = new TwoPaneToolPicker(
       ["tool-a"],
       new Set(),
+      new Set(),
+      new Set(),
       projectTools,
       ["future-tool"], // unknown preserved
       plainTheme,
@@ -392,6 +779,8 @@ describe("TwoPaneToolPicker input", () => {
     const picker = new TwoPaneToolPicker(
       ["tool-a", "tool-b"], // tool-b in Available
       new Set(),
+      new Set(),
+      new Set(),
       projectTools,
       [],
       plainTheme,
@@ -410,12 +799,68 @@ describe("TwoPaneToolPicker input", () => {
     expect(projectTools.has("tool-a")).toBe(false);
   });
 
-  it("Enter on Granted global tool is a no-op (read-only)", () => {
+  it("Enter on Granted project-only tool moves it to Available", () => {
+    const projectTools = new Set(["tool-a"]);
+    const picker = new TwoPaneToolPicker(
+      ["tool-a", "tool-b"],
+      new Set(),
+      new Set(),
+      new Set(),
+      projectTools,
+      [],
+      plainTheme,
+      5,
+      persistOk,
+      () => {},
+    );
+    picker.handleInput("\t"); // switch to Granted
+    picker.handleInput("\r"); // revoke tool-a
+
+    // tool-a should now be in Available (not Granted)
+    const rendered = picker.render(60).join("\n");
+    // Both tool-a and tool-b are now in Available, no tools in Granted
+    expect(rendered).toContain("▶ Available");
+  });
+
+  it("Enter on Granted multi-source tool with project source removes only project", () => {
+    const projectTools = new Set(["tool-a"]);
     const persisted: string[][] = [];
     const picker = new TwoPaneToolPicker(
       ["tool-a", "tool-b"],
-      new Set(["tool-a"]), // tool-a is global
       new Set(),
+      new Set(),
+      new Set(["tool-a"]), // tool-a also global
+      projectTools,
+      [],
+      plainTheme,
+      5,
+      (tools) => {
+        persisted.push([...tools]);
+        return true;
+      },
+      () => {},
+    );
+    picker.handleInput("\t"); // switch to Granted
+    picker.handleInput("\r"); // revoke project source of tool-a
+
+    // tool-a remains in Granted (still has global source), only project badge removed
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).not.toContain("tool-a");
+    expect(projectTools.has("tool-a")).toBe(false);
+    // tool-a should still be in Granted column (global source remains)
+    const rendered = picker.render(60).join("\n");
+    expect(rendered).toContain("[global]");
+  });
+
+  it("Enter on Granted inherited-only tool is a no-op (no project source)", () => {
+    // tool-a has only a global/agent source, not a project source
+    const persisted: string[][] = [];
+    const picker = new TwoPaneToolPicker(
+      ["tool-a", "tool-b"],
+      new Set(["tool-a"]), // agent source — no project source
+      new Set(),
+      new Set(),
+      new Set(), // currentProjectTools empty
       [],
       plainTheme,
       5,
@@ -427,7 +872,7 @@ describe("TwoPaneToolPicker input", () => {
     );
     // Switch to Granted (tool-b in Available, Available is active by default)
     picker.handleInput("\t");
-    // tool-a (global) is first/selected item in Granted
+    // tool-a (agent-only) is first/selected item in Granted
     picker.handleInput("\r"); // Enter — should be no-op
     expect(persisted).toHaveLength(0);
   });
@@ -436,6 +881,8 @@ describe("TwoPaneToolPicker input", () => {
     const projectTools = new Set<string>();
     const picker = new TwoPaneToolPicker(
       ["tool-a"],
+      new Set(),
+      new Set(),
       new Set(),
       projectTools,
       [],
@@ -455,6 +902,8 @@ describe("TwoPaneToolPicker input", () => {
     const picker = new TwoPaneToolPicker(
       ["tool-a", "tool-b"],
       new Set(),
+      new Set(),
+      new Set(),
       projectTools,
       [],
       plainTheme,
@@ -471,9 +920,20 @@ describe("TwoPaneToolPicker input", () => {
 
   it("Escape calls onDone via the active list", () => {
     let closed = false;
-    const picker = new TwoPaneToolPicker(["tool-a"], new Set(), new Set(), [], plainTheme, 5, persistOk, () => {
-      closed = true;
-    });
+    const picker = new TwoPaneToolPicker(
+      ["tool-a"],
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+      [],
+      plainTheme,
+      5,
+      persistOk,
+      () => {
+        closed = true;
+      },
+    );
     picker.handleInput("\x1b"); // Escape
     expect(closed).toBe(true);
   });
@@ -482,8 +942,10 @@ describe("TwoPaneToolPicker input", () => {
     let closed = false;
     const picker = new TwoPaneToolPicker(
       ["tool-a"],
-      new Set(["tool-a"]), // global → Granted is default active
+      new Set(["tool-a"]),
       new Set(),
+      new Set(),
+      new Set(), // agent → Granted is default active
       [],
       plainTheme,
       5,
@@ -678,13 +1140,13 @@ describe("handler argument validation", () => {
   });
 });
 
-// ─── handler: frontmatter tool filtering ────────────────────────────────────
+// ─── handler: tool source computation ────────────────────────────────────────
 
-describe("handler: frontmatter tool filtering", () => {
+describe("handler: tool source computation", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "pi-imps-fm-"));
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-imps-src-"));
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
   });
 
@@ -693,53 +1155,98 @@ describe("handler: frontmatter tool filtering", () => {
   });
 
   it("opens the TUI when agent has frontmatter tools", async () => {
-    const agents: AgentConfig[] = [
-      {
-        name: "mason",
-        description: "Mason",
-        systemPrompt: "",
-        source: "user",
-        filePath: "/a/mason.md",
-        tools: ["read"],
-      },
-    ];
+    const agents: AgentConfig[] = [makeAgentWithTools("mason", ["read"])];
     const cmd = createImpsCommand(makePi(["bash", "read"]), agents, makeSettings());
     const { ctx, custom } = makeCtx(tmpDir);
     await cmd.handler("tools mason", ctx);
     expect(custom).toHaveBeenCalledOnce();
   });
 
-  it("preserves frontmatter-granted project tools on write via the unknown-preserved path", () => {
-    // When mason has frontmatter tools: ["read"] and the project config already
-    // grants "read", the handler classifies "read" as an unknown preserved tool
-    // (not visible, not toggleable). Granting another visible tool must keep "read".
-    // Verified via computeGrantResult with the same classification the handler uses:
-    // "read" is in frontmatter — not in visibleToolNames, so it lands in unknownProjectTools.
-    const result = computeGrantResult("bash", new Set(), ["read"]);
-    expect(result).toContain("bash");
-    expect(result).toContain("read"); // preserved from frontmatter-filtered project grant
-  });
-
-  it("does not show frontmatter tools as global grants even when both match", async () => {
-    // A tool in both frontmatter AND global settings is hidden (not read-only visible).
-    // partitionTools is called with the pre-filtered visibleToolNames, so the
-    // frontmatter tool never reaches the partition at all.
-    const agents: AgentConfig[] = [
-      {
-        name: "mason",
-        description: "Mason",
-        systemPrompt: "",
-        source: "user",
-        filePath: "/a/mason.md",
-        tools: ["read"],
-      },
-    ];
-    // "read" is also a global grant — it should still be hidden because frontmatter wins
-    const settings = makeSettings({ mason: ["read"] });
-    const cmd = createImpsCommand(makePi(["bash", "read"]), agents, settings);
+  it("opens the TUI when agent has no frontmatter tools (default baseline)", async () => {
+    const cmd = createImpsCommand(makePi(["bash", "read"]), makeAgents("mason"), makeSettings());
     const { ctx, custom } = makeCtx(tmpDir);
     await cmd.handler("tools mason", ctx);
-    // TUI opens (no error), meaning the handler ran past the filtering step cleanly.
     expect(custom).toHaveBeenCalledOnce();
+  });
+
+  it("opens the TUI when agent has explicit empty frontmatter tools: []", async () => {
+    const agents: AgentConfig[] = [makeAgentWithTools("mason", [])];
+    const cmd = createImpsCommand(makePi(["bash", "read"]), agents, makeSettings({}, ["bash"]));
+    const { ctx, custom } = makeCtx(tmpDir);
+    await cmd.handler("tools mason", ctx);
+    expect(custom).toHaveBeenCalledOnce();
+  });
+
+  it("computeBaseToolSources: explicit frontmatter produces agentTools, empty defaultTools", () => {
+    const agent = makeAgentWithTools("mason", ["read", "bash"]);
+    const settings = makeSettings({}, ["grep"]); // allowlist present but should be ignored
+    const allTools = ["bash", "grep", "read"];
+    const { agentTools, defaultTools } = computeBaseToolSources(agent, settings, allTools);
+    expect([...agentTools].sort()).toEqual(["bash", "read"]);
+    expect(defaultTools.size).toBe(0);
+  });
+
+  it("computeBaseToolSources: no frontmatter + toolAllowlist → defaultTools from allowlist", () => {
+    const agent = makeAgents("mason")[0];
+    const settings = makeSettings({}, ["grep", "bash"]);
+    const allTools = ["bash", "grep", "read"];
+    const { agentTools, defaultTools } = computeBaseToolSources(agent, settings, allTools);
+    expect(agentTools.size).toBe(0);
+    expect([...defaultTools].sort()).toEqual(["bash", "grep"]);
+  });
+
+  it("computeBaseToolSources: no frontmatter + no toolAllowlist → defaultTools = all tools", () => {
+    const agent = makeAgents("mason")[0];
+    const settings = makeSettings(); // no toolAllowlist
+    const allTools = ["bash", "grep", "read"];
+    const { agentTools, defaultTools } = computeBaseToolSources(agent, settings, allTools);
+    expect(agentTools.size).toBe(0);
+    expect([...defaultTools].sort()).toEqual(allTools);
+  });
+
+  it("computeBaseToolSources: explicit empty [] → both agentTools and defaultTools empty", () => {
+    const agent = makeAgentWithTools("mason", []);
+    const settings = makeSettings({}, ["grep"]); // allowlist present but irrelevant
+    const allTools = ["bash", "grep", "read"];
+    const { agentTools, defaultTools } = computeBaseToolSources(agent, settings, allTools);
+    expect(agentTools.size).toBe(0);
+    expect(defaultTools.size).toBe(0);
+  });
+
+  it("preserves unregistered project tool names on write (unknown preservation)", () => {
+    // An unregistered tool name in the project config must be preserved on every write.
+    // We test this via computeGrantResult with the same logic the handler uses:
+    // "future-armory-tool" is not in allToolNames → goes into unknownProjectTools.
+    const result = computeGrantResult("bash", new Set(), ["future-armory-tool"]);
+    expect(result).toContain("bash");
+    expect(result).toContain("future-armory-tool");
+  });
+
+  it("frontmatter tools appear in Granted column (not hidden) with agent badge", () => {
+    // Unlike the previous design that filtered frontmatter tools from the picker,
+    // they now appear in Granted with an [agent] badge.
+    const agent = makeAgentWithTools("mason", ["read"]);
+    const { agentTools } = computeBaseToolSources(agent, makeSettings(), ["bash", "read"]);
+    const { granted, available } = partitionTools(["bash", "read"], agentTools, new Set(), new Set(), new Set());
+    expect(granted).toContain("read");
+    expect(available).not.toContain("read");
+  });
+
+  it("failed write: transactional — in-memory state unchanged on persistence failure", () => {
+    const projectTools = new Set<string>();
+    const picker = new TwoPaneToolPicker(
+      ["tool-a"],
+      new Set(),
+      new Set(),
+      new Set(),
+      projectTools,
+      [],
+      plainTheme,
+      5,
+      (_tools) => false, // persistence always fails
+      () => {},
+    );
+    picker.handleInput("\r"); // attempt to grant
+    expect(projectTools.has("tool-a")).toBe(false);
   });
 });
