@@ -552,14 +552,13 @@ describe("TwoPaneToolPicker render", () => {
       persistOk,
       () => {},
     );
-    // Switch to available column so we can verify items
     const lines = picker.render(60);
-    // Lines after the header — the Available column (right side) should not contain brackets
-    // This is a coarse check: the Available items should not contain any [badge] text
     const allText = lines.slice(1).join("\n");
-    // Available items have empty currentValue — no badge brackets
-    // Only way brackets appear is in Granted column which is empty here
-    expect(allText).not.toContain("[");
+    // Available items carry no badge — verify none of the four badge tokens appear.
+    // (Raw ANSI CSI sequences contain `[` so we check the specific tokens, not bare `[`.)
+    for (const badge of ["[agent]", "[default]", "[global]", "[project]"]) {
+      expect(allText).not.toContain(badge);
+    }
   });
 
   it("all rendered lines are <= the requested width", () => {
