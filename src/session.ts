@@ -16,15 +16,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
 import { loadProjectConfig } from "./settings.js";
-import type { AgentConfig, ImpSettings } from "./types.js";
+import type { AgentConfig, ImpSettings, ThinkingLevel } from "./types.js";
+
+export type { ThinkingLevel };
 
 const OWN_PACKAGE_NAME = pkg.name;
 
 type SdkThinkingLevel = NonNullable<CreateAgentSessionOptions["thinkingLevel"]>;
 const MAX_COMPAT_THINKING_LEVEL: SdkThinkingLevel = "xhigh";
-
-/** Thinking levels accepted from parent pi sessions. */
-export type ThinkingLevel = SdkThinkingLevel | "max";
 
 /** Map host-only levels to the highest level supported by the local SDK boundary. */
 export function resolveImpThinkingLevel(level: ThinkingLevel): SdkThinkingLevel {
@@ -115,7 +114,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   const { session } = await createAgentSession({
     cwd,
     model,
-    thinkingLevel: resolveImpThinkingLevel(parentThinkingLevel),
+    thinkingLevel: resolveImpThinkingLevel(config.thinking ?? parentThinkingLevel),
     tools: toolAllowlist,
     sessionManager: SessionManager.inMemory(),
     settingsManager: createImpSettingsManager(cwd),

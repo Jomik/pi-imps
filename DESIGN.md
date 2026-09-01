@@ -87,7 +87,7 @@ Running imp count in the status line. Minimal — just the count.
 
 ### Imp Sessions
 
-In-memory, no persistence. Named agents use their frontmatter model when configured; otherwise they inherit the parent's model.
+In-memory, no persistence. Named agents use their frontmatter model when configured; otherwise they inherit the parent's model. Named agents use their frontmatter `thinking` level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`) when configured; otherwise they inherit the parent's current thinking level. The host-only `max` value is mapped to `xhigh` at the SDK boundary after agent-or-parent resolution.
 
 ### Tools
 

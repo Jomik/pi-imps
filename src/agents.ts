@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig, AgentSource } from "./types.js";
+import type { AgentConfig, AgentSource, ThinkingLevel } from "./types.js";
 
 function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
   if (!existsSync(dir)) return [];
@@ -40,6 +40,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
       model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
       tools: parseToolsList(frontmatter.tools),
       turnLimit,
+      thinking: parseThinkingLevel(frontmatter.thinking),
       systemPrompt: body.trim(),
       source,
       filePath,
@@ -79,6 +80,19 @@ export function parseTurnLimit(value: unknown): number | undefined {
   if (!Number.isInteger(value)) return undefined;
   if (value < 2) return undefined;
   return value;
+}
+
+const VALID_THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/**
+ * Parse a thinking level value from frontmatter.
+ * Returns the ThinkingLevel if recognized, else undefined.
+ * Invalid values are silently ignored (same pattern as parseTurnLimit).
+ */
+export function parseThinkingLevel(value: unknown): ThinkingLevel | undefined {
+  if (typeof value !== "string") return undefined;
+  if (VALID_THINKING_LEVELS.has(value as ThinkingLevel)) return value as ThinkingLevel;
+  return undefined;
 }
 
 /**
