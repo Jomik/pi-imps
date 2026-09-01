@@ -131,6 +131,8 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   let totalUsage = { input: 0, output: 0 };
   let truncated = false;
   let providerError: string | undefined;
+  let lastStopReason: string | undefined;
+  let lastErrorMessage: string | undefined;
 
   const turnLimit = resolveTurnLimit(config.turnLimit, settings.turnLimit);
 
@@ -191,6 +193,8 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
       if (msg.content) {
         extractAssistantText(msg.content);
       }
+      lastStopReason = msg.stopReason;
+      lastErrorMessage = msg.errorMessage;
     }
   });
 
@@ -200,9 +204,17 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     .then(() => {
       if (truncated) {
         onComplete({ output: lastOutput, truncated: true });
-      } else {
-        onComplete({ output: lastOutput, error: providerError });
+        return;
       }
+      if (lastStopReason === "error" || lastStopReason === "aborted" || lastStopReason === "length") {
+        onComplete({ output: lastOutput, error: resolveCompletionError() });
+        return;
+      }
+      if (lastOutput.trim() === "") {
+        onComplete({ output: lastOutput, error: resolveCompletionError() });
+        return;
+      }
+      onComplete({ output: lastOutput });
     })
     .catch((err) => {
       // Abort due to truncation is not an error
@@ -215,6 +227,16 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
         error: err instanceof Error ? err.message : String(err),
       });
     });
+
+  function resolveCompletionError(): string {
+    const agentStateError = session.state.errorMessage;
+    return (
+      lastErrorMessage ||
+      agentStateError ||
+      providerError ||
+      `Imp failed to complete (stopReason: ${lastStopReason ?? "unknown"})`
+    );
+  }
 
   return session;
 }

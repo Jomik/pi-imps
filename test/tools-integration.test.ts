@@ -207,6 +207,93 @@ describe("summon → wait integration", () => {
     expect(json[0].error).toBe("API key invalid");
   });
 
+  it("resolved stopReason=length with partial text yields failed with partial output preserved", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+    const mock = installMock({}); // manual control — no totalTurns
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+
+    await waitForPromptStart(mock);
+    mock.controls.finish("partial analysis before cutoff", { stopReason: "length" });
+
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    const json = parseResult(result);
+
+    expect(json[0].status).toBe("failed");
+    expect(json[0].output).toBe("partial analysis before cutoff");
+    expect(json[0].error).toContain("length");
+  });
+
+  it("resolved stopReason=error with errorMessage surfaces that message as the failure", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+    const mock = installMock({}); // manual control — no totalTurns
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+
+    await waitForPromptStart(mock);
+    mock.controls.finish("", { stopReason: "error", errorMessage: "rate limit exceeded" });
+
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    const json = parseResult(result);
+
+    expect(json[0].status).toBe("failed");
+    expect(json[0].error).toBe("rate limit exceeded");
+  });
+
+  it("resolved stopReason=stop with empty text yields failed with a stopReason-specific error", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+    const mock = installMock({}); // manual control — no totalTurns
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+
+    await waitForPromptStart(mock);
+    mock.controls.finish("", { stopReason: "stop" });
+
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    const json = parseResult(result);
+
+    expect(json[0].status).toBe("failed");
+    expect(json[0].output).toBe("");
+    expect(json[0].error).toContain("stop");
+  });
+
+  it("resolved stopReason=aborted with no errorMessage yields failed, preserving partial output", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+    const mock = installMock({}); // manual control — no totalTurns
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+
+    await waitForPromptStart(mock);
+    mock.controls.finish("partial work before abort", { stopReason: "aborted" });
+
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    const json = parseResult(result);
+
+    expect(json[0].status).toBe("failed");
+    expect(json[0].output).toBe("partial work before abort");
+    expect(json[0].error).toContain("aborted");
+  });
+
   it("turn limit triggers steer with FINAL TURN directive and truncates", async () => {
     const imps = new Map();
     const namePool = makeNamePool();
