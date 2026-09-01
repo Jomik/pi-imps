@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildAgentsBlock, discoverAgents, parseToolsList, parseTurnLimit } from "../src/agents.js";
+import { buildAgentsBlock, discoverAgents, parseThinkingLevel, parseToolsList, parseTurnLimit } from "../src/agents.js";
 import type { AgentConfig } from "../src/types.js";
 
 // Mock getAgentDir so tests never touch the real ~/.pi/agent/agents/ directory.
@@ -101,6 +101,37 @@ describe("parseTurnLimit", () => {
     expect(parseTurnLimit(null)).toBeUndefined();
     expect(parseTurnLimit(true)).toBeUndefined();
     expect(parseTurnLimit([30])).toBeUndefined();
+  });
+});
+
+// ─── parseThinkingLevel ────────────────────────────────────────────────────
+
+describe("parseThinkingLevel", () => {
+  it("accepts all valid SDK levels", () => {
+    expect(parseThinkingLevel("off")).toBe("off");
+    expect(parseThinkingLevel("minimal")).toBe("minimal");
+    expect(parseThinkingLevel("low")).toBe("low");
+    expect(parseThinkingLevel("medium")).toBe("medium");
+    expect(parseThinkingLevel("high")).toBe("high");
+    expect(parseThinkingLevel("xhigh")).toBe("xhigh");
+  });
+
+  it("accepts the host-only max alias", () => {
+    expect(parseThinkingLevel("max")).toBe("max");
+  });
+
+  it("returns undefined for unrecognized string", () => {
+    expect(parseThinkingLevel("turbo")).toBeUndefined();
+    expect(parseThinkingLevel("MAX")).toBeUndefined();
+    expect(parseThinkingLevel("")).toBeUndefined();
+  });
+
+  it("returns undefined for non-string values", () => {
+    expect(parseThinkingLevel(undefined)).toBeUndefined();
+    expect(parseThinkingLevel(null)).toBeUndefined();
+    expect(parseThinkingLevel(42)).toBeUndefined();
+    expect(parseThinkingLevel(true)).toBeUndefined();
+    expect(parseThinkingLevel(["high"])).toBeUndefined();
   });
 });
 

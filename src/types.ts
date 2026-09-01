@@ -1,4 +1,13 @@
+import type { CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
+
 export type ImpStatus = "running" | "completed" | "failed" | "dismissed" | "truncated";
+
+/**
+ * Thinking levels accepted from frontmatter and the parent callback path.
+ * Derived from the installed SDK's CreateAgentSessionOptions["thinkingLevel"] union
+ * to stay in sync automatically, plus the host-only `max` alias.
+ */
+export type ThinkingLevel = NonNullable<CreateAgentSessionOptions["thinkingLevel"]> | "max";
 
 /** Serializable subset of Imp — safe for details/display, no runtime handles. */
 export interface ImpSnapshot {
@@ -32,6 +41,7 @@ export interface AgentConfig {
   readonly model?: string;
   readonly tools?: string[];
   readonly turnLimit?: number;
+  readonly thinking?: ThinkingLevel;
   readonly systemPrompt: string;
   readonly source: AgentSource;
   readonly filePath: string;

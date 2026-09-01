@@ -137,6 +137,54 @@ describe("summon → wait integration", () => {
     expect(vi.mocked(createAgentSession)).toHaveBeenCalledWith(expect.objectContaining({ thinkingLevel: "xhigh" }));
   });
 
+  it("agent thinking overrides parent thinking", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+    installMock({ totalTurns: 1 });
+
+    const agentWithThinking: AgentConfig = { ...testAgent, thinking: "high" };
+    const summon = summonTool(imps, [agentWithThinking], namePool, makeSettings(), () => "low");
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+    await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+
+    expect(vi.mocked(createAgentSession)).toHaveBeenCalledWith(expect.objectContaining({ thinkingLevel: "high" }));
+  });
+
+  it("agent with no thinking inherits parent thinking", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+    installMock({ totalTurns: 1 });
+
+    const agentNoThinking: AgentConfig = { ...testAgent, thinking: undefined };
+    const summon = summonTool(imps, [agentNoThinking], namePool, makeSettings(), () => "medium");
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+    await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+
+    expect(vi.mocked(createAgentSession)).toHaveBeenCalledWith(expect.objectContaining({ thinkingLevel: "medium" }));
+  });
+
+  it("agent thinking max maps to xhigh (SDK compat)", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+    installMock({ totalTurns: 1 });
+
+    const agentWithMax: AgentConfig = { ...testAgent, thinking: "max" };
+    const summon = summonTool(imps, [agentWithMax], namePool, makeSettings(), () => "low");
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+    await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+
+    expect(vi.mocked(createAgentSession)).toHaveBeenCalledWith(expect.objectContaining({ thinkingLevel: "xhigh" }));
+  });
+
   it("provider failure via auto_retry_end event yields status=failed", async () => {
     const imps = new Map();
     const namePool = makeNamePool();
