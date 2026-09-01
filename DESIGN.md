@@ -129,11 +129,13 @@ This allows projects to grant agents access to project-specific tools (e.g. armo
 
 #### Project tool grants UI
 
-The `/imps tools <imp-name>` TUI command provides a simpler way to manage project-level additive tool grants. The imp-name argument offers completion from discovered agents. Missing or unknown names produce usage guidance rather than opening another selection step.
+The `/imps tools <agent-name>` TUI command provides a simpler way to manage project-level additive tool grants. The agent-name argument offers completion from discovered agents. A missing name produces usage guidance; an unknown name produces an explicit warning. Neither opens another selection step.
 
-The picker shows two side-by-side searchable columns: **Granted** and **Available**. It lists tools currently registered in the parent pi session that are not already enabled by the selected agent's frontmatter `tools`; search uses the TUI's built-in fuzzy matching. Project grants can move between columns. Tools granted by global pi-imps settings appear in **Granted** as read-only entries unless they are already hidden by frontmatter. The picker does not otherwise classify tools by registration source or depend on pi-armory configuration details.
+The picker shows every tool currently registered in the parent pi session once, across two side-by-side searchable columns: **Granted** and **Available**. Search uses the TUI's built-in fuzzy matching. Granted tools show all applicable source badges: `agent` for explicit agent-frontmatter tools, `default` for the fallback global `toolAllowlist` (or all tools when neither baseline is configured), `global` for per-agent grants from global pi-imps settings, and `project` for project grants. The `agent` and `default` sources are mutually exclusive. The picker does not depend on pi-armory configuration details.
 
-Left/right arrows or Tab change the active column, up/down arrows navigate it, and Enter or Space moves the selected tool to the other column. Escape closes the picker. The layout truncates tool names as needed on narrow terminals rather than switching to a separate responsive layout. The UI states that project grants are additive: removing a project grant cannot remove access provided by another scope, and project grants have no effect when the agent's base already allows all tools.
+Only the `project` source is editable. Enter or Space on an Available tool adds a project grant and moves it to Granted. On a Granted tool with a project source, it removes only that source; a project-only tool moves to Available, while a tool with another source remains Granted with updated badges. Granted tools without a project source are read-only.
+
+Left/right arrows or Tab change the active column, up/down arrows navigate it, and Escape closes the picker. The layout truncates tool names and badges as needed on narrow terminals rather than switching to a separate responsive layout. The UI states that project grants are additive and cannot remove access provided by another source.
 
 Each project-grant change is persisted to the project config and affects subsequently summoned imps. Existing settings for other agents and unrecognized tool names are preserved. If the existing config cannot be read or parsed, the command reports the error and does not overwrite it.
 
