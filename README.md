@@ -58,6 +58,8 @@ You are a security reviewer. Focus on authentication, authorization, and input v
 | `tools` | no | Restrict which tools the agent can use. Omit to fall back to the global `toolAllowlist`, or all tools if no global allowlist is set |
 | `turns` | no | Per-agent turn limit (minimum 2). Overrides the global `turnLimit` setting |
 
+Agent definitions are validated at startup and on reload; invalid files are skipped and reported in a single warning, and unknown extra frontmatter keys are allowed.
+
 ### Tool allowlist
 
 Control which tools imps have access to at two levels:

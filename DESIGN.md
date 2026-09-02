@@ -53,6 +53,8 @@ When `names` is provided, `wait` targets only those imps. When omitted, it targe
 
 Imp failures are returned as results with `failed` status, not thrown exceptions. The LLM sees which imps succeeded and which failed (with error message) and decides how to proceed. If no uncollected imps exist, `wait` returns an empty result.
 
+The terminal assistant outcome is authoritative when the session prompt resolves. Provider errors and assistant stop reasons `error`, `aborted`, or `length` produce `failed` results. Any partial text is preserved alongside the error. A nominally successful terminal response with no text also fails with a diagnostic that includes its stop reason. Model-provided error details are preferred; stable fallback messages are used when none are available. Imp turn-limit termination remains `truncated` and takes precedence over model completion status. Thinking content and new completion metadata are not exposed.
+
 The result payload is the imp's final assistant message — no summarization or truncation. The delegator controls verbosity through its task description (e.g. "summarize briefly" vs "full analysis").
 
 #### `dismiss`
@@ -75,7 +77,9 @@ All imp state is session-scoped. `wait`/`dismiss`/`list_imps` only see imps from
 
 ### Agent Discovery
 
-Scan global (`~/.pi/agent/agents/`) and project-local (`.pi/agents/`) directories for agent `.md` files with YAML frontmatter.
+Scan global (`~/.pi/agent/agents/`) and project-local (`.pi/agents/`) directories for agent `.md` files with YAML frontmatter. Each file is validated when discovered: read and YAML failures, missing required fields, and invalid values for supported optional fields make that definition invalid. Unknown extra frontmatter fields remain allowed.
+
+Invalid definitions are excluded while valid agents continue loading. Project definitions remain authoritative: an invalid project definition must not silently fall back to a global agent with the same effective name. All discovery problems are aggregated into one human-facing warning with file paths during session startup or reload. Diagnostics are not injected into the system prompt or returned by imp tools.
 
 ### System Prompt
 

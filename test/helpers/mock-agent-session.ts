@@ -1,3 +1,4 @@
+import type { StopReason } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 // ─── Config & Controls ────────────────────────────────────────────────────────
@@ -21,7 +22,8 @@ export interface MockSessionControls {
     finalText?: string;
     toolCall?: { toolName: string; args: Record<string, unknown> };
   }): Promise<void>;
-  finish(finalText?: string): void;
+  /** Resolve the manual-control prompt with a final assistant message. Defaults to stopReason "stop". */
+  finish(finalText?: string, opts?: { stopReason?: StopReason; errorMessage?: string }): void;
   fail(message: string): void;
   /** Emit auto_retry_end with success=false then resolve the promise (provider failure path). */
   failWithProviderEvent(message: string): void;
@@ -35,6 +37,7 @@ interface MockSessionSurface {
   steer(text: string): Promise<void>;
   abort(): Promise<void>;
   prompt(task: string): Promise<void>;
+  state: { errorMessage?: string };
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -48,13 +51,18 @@ export function createMockSession(config: MockSessionConfig = {}): {
   // Stub AssistantMessage builder. src/session.ts only reads role, usage.{input,output},
   // and content[].{type,text}; the remaining fields exist solely to satisfy the SDK type
   // so a future shape change in @earendil-works/pi-ai/pi-coding-agent fails this build.
-  const makeAssistantMessage = (text: string, usage: { input: number; output: number }) => ({
+  const makeAssistantMessage = (
+    text: string,
+    usage: { input: number; output: number },
+    opts?: { stopReason?: StopReason; errorMessage?: string },
+  ) => ({
     role: "assistant" as const,
     content: [{ type: "text" as const, text }],
     api: "mock",
     provider: "mock",
     model: "mock",
-    stopReason: "stop" as const,
+    stopReason: (opts?.stopReason ?? "stop") as StopReason,
+    errorMessage: opts?.errorMessage,
     timestamp: 0,
     usage: {
       input: usage.input,
@@ -111,8 +119,8 @@ export function createMockSession(config: MockSessionConfig = {}): {
       await Promise.resolve();
     },
 
-    finish(finalText) {
-      pendingFinish?.(finalText);
+    finish(finalText, opts) {
+      pendingFinish?.(finalText, opts);
     },
 
     fail(message) {
@@ -128,16 +136,22 @@ export function createMockSession(config: MockSessionConfig = {}): {
         finalError: message,
       } satisfies AgentSessionEvent;
       for (const l of listeners) l(evt);
-      // Resolve (not reject) — provider failure surfaces via event, not exception
-      pendingFinish?.();
+      // Resolve (not reject) — provider failure surfaces via event, not exception.
+      // Empty terminal assistant message with stopReason "error" and no assistant
+      // errorMessage, so providerError is the only source of the failure text.
+      pendingFinish?.("", { stopReason: "error" });
     },
   };
 
   // Callbacks for the manual-control (no totalTurns) path
-  let pendingFinish: ((finalText?: string) => void) | undefined;
+  let pendingFinish:
+    | ((finalText?: string, opts?: { stopReason?: StopReason; errorMessage?: string }) => void)
+    | undefined;
   let pendingFail: ((message: string) => void) | undefined;
 
   const mockSession: MockSessionSurface = {
+    state: {},
+
     async bindExtensions(_bindings) {
       // no-op
     },
@@ -208,13 +222,16 @@ export function createMockSession(config: MockSessionConfig = {}): {
 
       // Manual control path: wait for finish() / fail() / abort()
       await new Promise<void>((resolve, reject) => {
-        pendingFinish = (finalText) => {
+        pendingFinish = (finalText, opts) => {
           pendingFinish = undefined;
           pendingFail = undefined;
           const text = finalText ?? config.finalText ?? "ok";
+          if (opts?.errorMessage) {
+            mockSession.state.errorMessage = opts.errorMessage;
+          }
           const endEvt = {
             type: "message_end" as const,
-            message: makeAssistantMessage(text, { input: 0, output: 0 }),
+            message: makeAssistantMessage(text, { input: 0, output: 0 }, opts),
           } satisfies AgentSessionEvent;
           for (const l of listeners) l(endEvt);
           controls.promptResolved = true;
