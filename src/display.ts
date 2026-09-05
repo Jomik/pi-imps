@@ -97,6 +97,9 @@ export function formatWaitDisplay(
 
   if (mode === "first") {
     const winner = imps[0];
+    if (winner && (winner.status === "failed" || winner.status === "truncated")) {
+      return formatImpStatusDisplay(winner, theme, animationFrame);
+    }
     if (winner && winner.status !== "running") {
       const name = theme.fg("accent", winner.name);
       const agent = formatAgentSuffix(winner.agent, theme);

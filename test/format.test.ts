@@ -244,4 +244,37 @@ describe("formatWaitDisplay", () => {
     expect(s).toContain("4.0k↓");
     expect(s).toContain("4.3k↑");
   });
+
+  it("first mode with failed winner shows failed status and error", () => {
+    const imps = [
+      makeImp({
+        name: "kevin",
+        agent: "cartographer",
+        status: "failed",
+        error: "boom: something broke",
+        turns: 2,
+        tokens: { input: 4000, output: 4300 },
+      }),
+    ];
+    const s = formatWaitDisplay(imps, "first", theme);
+    expect(s).toContain("kevin");
+    expect(s).toContain("boom: something broke");
+    expect(s).not.toContain("finished first");
+  });
+
+  it("first mode with truncated winner shows turn limit reached", () => {
+    const imps = [
+      makeImp({
+        name: "kevin",
+        agent: "cartographer",
+        status: "truncated",
+        turns: 2,
+        tokens: { input: 4000, output: 4300 },
+      }),
+    ];
+    const s = formatWaitDisplay(imps, "first", theme);
+    expect(s).toContain("kevin");
+    expect(s).toContain("turn limit reached");
+    expect(s).not.toContain("finished first");
+  });
 });
