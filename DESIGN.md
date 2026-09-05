@@ -53,7 +53,9 @@ When `names` is provided, `wait` targets only those imps. When omitted, it targe
 
 Imp failures are returned as results with `failed` status, not thrown exceptions. The LLM sees which imps succeeded and which failed (with error message) and decides how to proceed. If no uncollected imps exist, `wait` returns an empty result.
 
-The terminal assistant outcome is authoritative when the session prompt resolves. Provider errors and assistant stop reasons `error`, `aborted`, or `length` produce `failed` results. Any partial text is preserved alongside the error. A nominally successful terminal response with no text also fails with a diagnostic that includes its stop reason. Model-provided error details are preferred; stable fallback messages are used when none are available. Imp turn-limit termination remains `truncated` and takes precedence over model completion status. Thinking content and new completion metadata are not exposed.
+The terminal assistant outcome is authoritative when the session prompt resolves. Provider errors and assistant stop reasons `error`, `aborted`, or `length` produce `failed` results. Any partial text is preserved alongside the error. A nominally successful terminal response with no text also fails with a diagnostic that includes its stop reason. Model-provided error details are preferred; stable fallback messages are used when none are available, so a failed result's `error` is never empty. Imp turn-limit termination remains `truncated` and takes precedence over model completion status. Thinking content and new completion metadata are not exposed.
+
+When the delegator reports a failed imp's error to the user, it quotes the exact `error` text verbatim rather than paraphrasing it into a generic message. In the TUI, a failed imp's status row is followed by that exact error text as a concise failure reason; a truncated imp's status row is labeled "turn limit reached".
 
 The result payload is the imp's final assistant message — no summarization or truncation. The delegator controls verbosity through its task description (e.g. "summarize briefly" vs "full analysis").
 

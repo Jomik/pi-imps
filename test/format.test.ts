@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildAgentsBlock } from "../src/agents.js";
-import { formatSummonDisplay, formatSummonTaskPreview, formatWaitDisplay } from "../src/display.js";
+import { formatImpStatusDisplay, formatSummonDisplay, formatSummonTaskPreview, formatWaitDisplay } from "../src/display.js";
 import type { AgentConfig, Imp } from "../src/types.js";
 
 function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
@@ -113,6 +113,48 @@ describe("formatSummonTaskPreview", () => {
   it("expanded: shows task: label", () => {
     const s = formatSummonTaskPreview("do something", true, theme);
     expect(s).toContain("task:");
+  });
+});
+
+// --- formatImpStatusDisplay ---
+
+describe("formatImpStatusDisplay", () => {
+  it("failed: renders the exact imp.error beneath the status row", () => {
+    const imp = makeImp({
+      name: "alice",
+      status: "failed",
+      error: "Provider error: rate limit exceeded (429)",
+      turns: 4,
+      tokens: { input: 100, output: 50 },
+    });
+    const s = formatImpStatusDisplay(imp, theme, 0);
+    expect(s).toContain("Provider error: rate limit exceeded (429)");
+    expect(s).toContain("\n  ");
+  });
+
+  it("failed: falls back to a non-empty message when imp.error is missing", () => {
+    const imp = makeImp({
+      name: "bob",
+      status: "failed",
+      turns: 1,
+      tokens: { input: 10, output: 5 },
+    });
+    const s = formatImpStatusDisplay(imp, theme, 0);
+    expect(s).toMatch(/\S/);
+    const secondLine = s.split("\n")[1] ?? "";
+    expect(secondLine.trim().length).toBeGreaterThan(0);
+  });
+
+  it("truncated: retains stats and states turn limit reached", () => {
+    const imp = makeImp({
+      name: "carol",
+      status: "truncated",
+      turns: 30,
+      tokens: { input: 5000, output: 5100 },
+    });
+    const s = formatImpStatusDisplay(imp, theme, 0);
+    expect(s).toContain("turn limit reached");
+    expect(s).toContain("30\u27f3");
   });
 });
 
