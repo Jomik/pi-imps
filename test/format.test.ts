@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildAgentsBlock } from "../src/agents.js";
-import { formatImpStatusDisplay, formatSummonDisplay, formatSummonTaskPreview, formatWaitDisplay } from "../src/display.js";
+import {
+  formatImpStatusDisplay,
+  formatSummonDisplay,
+  formatSummonTaskPreview,
+  formatWaitDisplay,
+} from "../src/display.js";
 import type { AgentConfig, Imp } from "../src/types.js";
 
 function makeImp(overrides: Partial<Imp> & { name: string }): Imp {
