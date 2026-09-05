@@ -294,6 +294,28 @@ describe("summon → wait integration", () => {
     expect(json[0].error).toContain("aborted");
   });
 
+  it("prompt rejection with an empty Error message yields failed with a stable non-empty diagnostic", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+    const mock = installMock({}); // manual control — no totalTurns
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings());
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+
+    await waitForPromptStart(mock);
+    mock.controls.fail(""); // rejection with an empty Error message
+
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    const json = parseResult(result);
+
+    expect(json[0].status).toBe("failed");
+    expect(typeof json[0].error).toBe("string");
+    expect(json[0].error.length).toBeGreaterThan(0);
+  });
+
   it("turn limit triggers steer with FINAL TURN directive and truncates", async () => {
     const imps = new Map();
     const namePool = makeNamePool();

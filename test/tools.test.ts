@@ -95,6 +95,14 @@ describe("summonTool renderResult", () => {
 // ─── wait ───────────────────────────────────────────────────────────────────
 
 describe("waitTool", () => {
+  it("description instructs the parent to report the exact error text, not a generic paraphrase", () => {
+    const imps = new Map<string, Imp>();
+    const tool = waitTool(imps);
+
+    expect(tool.description).toContain("verbatim");
+    expect(tool.description).toMatch(/paraphrase|summarize/);
+  });
+
   it("returns empty text for no uncollected imps", async () => {
     const imps = new Map<string, Imp>();
     const tool = waitTool(imps);

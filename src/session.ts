@@ -222,9 +222,10 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
         onComplete({ output: lastOutput, truncated: true });
         return;
       }
+      const message = err instanceof Error ? err.message : String(err);
       onComplete({
         output: lastOutput,
-        error: err instanceof Error ? err.message : String(err),
+        error: message || "Imp session rejected with no error message",
       });
     });
 
