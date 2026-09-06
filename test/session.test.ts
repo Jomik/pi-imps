@@ -1,4 +1,4 @@
-import { type Extension, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { type Extension, SettingsManager, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   createImpSettingsManager,
@@ -298,7 +298,7 @@ describe("normalizeEmptyToolError", () => {
       content: [],
       isError: true,
       details: undefined,
-    } as any);
+    } satisfies ToolResultEvent);
 
     expect(result).toEqual({
       content: [{ type: "text", text: 'Tool "bash" failed without an error message' }],
@@ -314,7 +314,7 @@ describe("normalizeEmptyToolError", () => {
       content: [{ type: "text", text: "   \n\t " }],
       isError: true,
       details: undefined,
-    } as any);
+    } satisfies ToolResultEvent);
 
     expect(result).toEqual({
       content: [{ type: "text", text: 'Tool "custom_tool" failed without an error message' }],
@@ -330,7 +330,7 @@ describe("normalizeEmptyToolError", () => {
       content: [{ type: "text", text: "command not found" }],
       isError: true,
       details: undefined,
-    } as any);
+    } satisfies ToolResultEvent);
 
     expect(result).toBeUndefined();
   });
@@ -344,7 +344,7 @@ describe("normalizeEmptyToolError", () => {
       content: [],
       isError: false,
       details: undefined,
-    } as any);
+    } satisfies ToolResultEvent);
 
     expect(result).toBeUndefined();
   });
@@ -358,7 +358,7 @@ describe("normalizeEmptyToolError", () => {
       content: [{ type: "image", data: "base64data", mimeType: "image/png" }],
       isError: true,
       details: undefined,
-    } as any);
+    } satisfies ToolResultEvent);
 
     expect(result).toBeUndefined();
   });
