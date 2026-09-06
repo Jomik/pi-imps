@@ -5,7 +5,9 @@ import type {
   AgentSession,
   CreateAgentSessionOptions,
   Extension,
+  ExtensionFactory,
   ModelRegistry,
+  ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
@@ -32,6 +34,37 @@ export function resolveImpThinkingLevel(level: ThinkingLevel): SdkThinkingLevel 
 
 const FINAL_TURN_DIRECTIVE =
   "FINAL TURN. Do not start new work. Save any pending changes, commit your progress, and respond with: (1) what you completed, (2) what remains unfinished.";
+
+/**
+ * Path `DefaultResourceLoader` assigns to the sole entry of `extensionFactories`
+ * (index 0 → `<inline:1>`). pi-imps always passes exactly one factory
+ * (`InlineExtension` below), so this path deterministically identifies it.
+ */
+const INLINE_EXTENSION_PATH = "<inline:1>";
+
+/**
+ * True when a nominally-failed tool result carries no meaningful content:
+ * no content blocks, or only empty/whitespace text blocks. Image content
+ * always counts as meaningful.
+ */
+function isEmptyToolResultContent(content: ToolResultEvent["content"]): boolean {
+  if (content.length === 0) return true;
+  return content.every((block) => block.type === "text" && block.text.trim() === "");
+}
+
+/** Normalizes empty error tool results before provider serialization. */
+export function normalizeEmptyToolError(event: ToolResultEvent) {
+  if (!event.isError) return undefined;
+  if (!isEmptyToolResultContent(event.content)) return undefined;
+  return {
+    content: [{ type: "text" as const, text: `Tool "${event.toolName}" failed without an error message` }],
+  };
+}
+
+/** Hidden inline extension registering `normalizeEmptyToolError` on every imp child session. */
+const InlineExtension: ExtensionFactory = (pi) => {
+  pi.on("tool_result", normalizeEmptyToolError);
+};
 
 export interface SpawnImpSessionOptions {
   task: string;
@@ -91,6 +124,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     noPromptTemplates: true,
     noThemes: true,
     systemPrompt: systemPrompt || undefined,
+    extensionFactories: [InlineExtension],
     extensionsOverride: (base) => ({
       ...base,
       extensions: base.extensions.filter((ext) =>
@@ -222,9 +256,10 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
         onComplete({ output: lastOutput, truncated: true });
         return;
       }
+      const message = err instanceof Error ? err.message : String(err);
       onComplete({
         output: lastOutput,
-        error: err instanceof Error ? err.message : String(err),
+        error: message || "Imp session rejected with no error message",
       });
     });
 
@@ -323,6 +358,9 @@ export function shouldIncludeExtension(
   additionalExtensions: string[],
   name?: string,
 ): boolean {
+  // pi-imps's own hidden inline extension always loads regardless of allowlist.
+  if (ext.path === INLINE_EXTENSION_PATH) return true;
+
   const extName = name ?? getExtensionPackageName(ext);
 
   // Always exclude ourselves (no recursion)

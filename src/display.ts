@@ -21,7 +21,8 @@ function formatStats(imp: ImpSnapshot, theme: Theme): string {
 /**
  * Format a single imp as a themed one-liner.
  *
- * Shows terse "✗ failed" for failures — full output is shown elsewhere in the TUI.
+ * Shows the imp's exact `error` text beneath a failed status row, and a
+ * "turn limit reached" label beneath a truncated status row.
  */
 export function formatImpStatusDisplay(imp: ImpSnapshot, theme: Theme, animationFrame: number): string {
   const name = theme.fg("accent", imp.name);
@@ -36,12 +37,14 @@ export function formatImpStatusDisplay(imp: ImpSnapshot, theme: Theme, animation
     }
     case "completed":
       return `${theme.fg("success", "✓")} ${base} ${stats}`;
-    case "failed":
-      return `${theme.fg("error", "✗")} ${base}`;
+    case "failed": {
+      const error = imp.error || theme.fg("dim", "Imp failed with no error message");
+      return `${theme.fg("error", "✗")} ${base}\n  ${theme.fg("error", error)}`;
+    }
     case "dismissed":
       return `${theme.fg("dim", "⊘")} ${base}`;
     case "truncated":
-      return `${theme.fg("warning", "!")} ${base} ${stats}`;
+      return `${theme.fg("warning", "!")} ${base} ${stats}\n  ${theme.fg("warning", "turn limit reached")}`;
     default:
       return `${base}: ${imp.status}`;
   }
@@ -94,6 +97,9 @@ export function formatWaitDisplay(
 
   if (mode === "first") {
     const winner = imps[0];
+    if (winner && (winner.status === "failed" || winner.status === "truncated")) {
+      return formatImpStatusDisplay(winner, theme, animationFrame);
+    }
     if (winner && winner.status !== "running") {
       const name = theme.fg("accent", winner.name);
       const agent = formatAgentSuffix(winner.agent, theme);

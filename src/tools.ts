@@ -171,9 +171,9 @@ export function summonTool(
           imp.completedAt = Date.now();
           if (result.truncated) {
             imp.status = "truncated";
-          } else if (result.error) {
+          } else if (result.error !== undefined) {
             imp.status = "failed";
-            imp.error = result.error;
+            imp.error = result.error || "Imp session rejected with no error message";
           } else {
             imp.status = "completed";
           }
@@ -192,7 +192,8 @@ export function summonTool(
         .catch((err) => {
           if (imp.status === "dismissed") return; // already dismissed
           imp.status = "failed";
-          imp.error = err instanceof Error ? err.message : String(err);
+          const message = err instanceof Error ? err.message : String(err);
+          imp.error = message || "Imp session rejected with no error message";
           imp.completedAt = Date.now();
           namePool.release(imp.name);
           resolveDone();
@@ -253,7 +254,7 @@ export function waitTool(
     name: "wait",
     label: "Wait for Imps",
     description:
-      "Block until imps complete. `mode=all` waits for every uncollected imp; `mode=first` returns the first to finish. Each result includes `status` (`completed`, `failed`, `truncated`, or `dismissed`), `output`, and `error`.",
+      "Block until imps complete. `mode=all` waits for every uncollected imp; `mode=first` returns the first to finish. Each result includes `status` (`completed`, `failed`, `truncated`, or `dismissed`), `output`, and `error`. When reporting a failed imp's error to the user, quote the exact `error` text verbatim — do not paraphrase or summarize it into a generic message.",
     promptGuidelines: [
       "Collected imps are removed from the session. wait({ mode: 'first' }) returns the first to complete; others keep running — call wait again or dismiss.",
     ],
