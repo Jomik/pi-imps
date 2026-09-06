@@ -2,6 +2,7 @@ import { type Extension, SettingsManager } from "@earendil-works/pi-coding-agent
 import { describe, expect, it } from "vitest";
 import {
   createImpSettingsManager,
+  normalizeEmptyToolError,
   resolveImpThinkingLevel,
   resolveToolAllowlist,
   resolveTurnLimit,
@@ -256,5 +257,109 @@ describe("shouldIncludeExtension", () => {
   it("includes extension with no tools when allowlist is undefined", () => {
     const ext = makeExt("pi-theme-only", []);
     expect(shouldIncludeExtension(ext, undefined, [], "pi-theme-only")).toBe(true);
+  });
+
+  // Inline pi-imps error-normalizer extension always survives filtering
+  it("retains the hidden inline error-normalizer extension through a restrictive allowlist", () => {
+    const inlineExt: Extension = {
+      path: "<inline:1>",
+      resolvedPath: "<inline:1>",
+      sourceInfo: {
+        path: "<inline:1>",
+        source: "temporary",
+        scope: "user",
+        origin: "top-level",
+        baseDir: undefined,
+      },
+      handlers: new Map(),
+      tools: new Map(),
+      messageRenderers: new Map(),
+      commands: new Map(),
+      flags: new Map(),
+      shortcuts: new Map(),
+    } as unknown as Extension;
+
+    // Restrictive allowlist that would normally exclude a no-tool extension.
+    expect(shouldIncludeExtension(inlineExt, ["read"], [])).toBe(true);
+    // Even an empty allowlist (no tools at all) keeps it.
+    expect(shouldIncludeExtension(inlineExt, [], [])).toBe(true);
+  });
+});
+
+// ─── normalizeEmptyToolError ───────────────────────────────────────────────
+
+describe("normalizeEmptyToolError", () => {
+  it("replaces an empty-array error result with a diagnostic text block", () => {
+    const result = normalizeEmptyToolError({
+      type: "tool_result",
+      toolCallId: "call_1",
+      toolName: "bash",
+      input: {},
+      content: [],
+      isError: true,
+      details: undefined,
+    } as any);
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: 'Tool "bash" failed without an error message' }],
+    });
+  });
+
+  it("replaces a whitespace-only text error result", () => {
+    const result = normalizeEmptyToolError({
+      type: "tool_result",
+      toolCallId: "call_2",
+      toolName: "custom_tool",
+      input: {},
+      content: [{ type: "text", text: "   \n\t " }],
+      isError: true,
+      details: undefined,
+    } as any);
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: 'Tool "custom_tool" failed without an error message' }],
+    });
+  });
+
+  it("leaves a non-empty text error result unchanged", () => {
+    const result = normalizeEmptyToolError({
+      type: "tool_result",
+      toolCallId: "call_3",
+      toolName: "bash",
+      input: {},
+      content: [{ type: "text", text: "command not found" }],
+      isError: true,
+      details: undefined,
+    } as any);
+
+    expect(result).toBeUndefined();
+  });
+
+  it("leaves a successful result unchanged", () => {
+    const result = normalizeEmptyToolError({
+      type: "tool_result",
+      toolCallId: "call_4",
+      toolName: "bash",
+      input: {},
+      content: [],
+      isError: false,
+      details: undefined,
+    } as any);
+
+    expect(result).toBeUndefined();
+  });
+
+  it("leaves an image-bearing error result unchanged", () => {
+    const result = normalizeEmptyToolError({
+      type: "tool_result",
+      toolCallId: "call_5",
+      toolName: "screenshot",
+      input: {},
+      content: [{ type: "image", data: "base64data", mimeType: "image/png" }],
+      isError: true,
+      details: undefined,
+    } as any);
+
+    expect(result).toBeUndefined();
   });
 });

@@ -148,6 +148,10 @@ Each project-grant change is persisted to the project config and affects subsequ
 The first version does not edit global settings or agent frontmatter, show complete effective merged permissions, identify pi-armory tool provenance, provide bulk grants, or add persistent UI.
 
 
+### Child-Session Error Normalization
+
+Every imp child session registers a hidden inline `tool_result` handler (not a discoverable extension, no LLM-callable tools, survives the tool-allowlist filter). When a tool result is marked `isError` but carries no meaningful content — an empty content array, or only empty/whitespace text — the handler replaces it with a single text block: `Tool "<toolName>" failed without an error message`. Successful results, non-empty text errors, and image-bearing results are left unchanged. This only normalizes what the provider sees; it performs no persistent logging and captures no provider payloads.
+
 ### Turn Limit
 
 A global safety net to prevent runaway imps. Default: 30 turns. Configurable in settings, not per-summon.

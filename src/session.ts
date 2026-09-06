@@ -5,7 +5,10 @@ import type {
   AgentSession,
   CreateAgentSessionOptions,
   Extension,
+  ExtensionFactory,
   ModelRegistry,
+  ToolResultEvent,
+  ToolResultEventResult,
 } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
@@ -32,6 +35,48 @@ export function resolveImpThinkingLevel(level: ThinkingLevel): SdkThinkingLevel 
 
 const FINAL_TURN_DIRECTIVE =
   "FINAL TURN. Do not start new work. Save any pending changes, commit your progress, and respond with: (1) what you completed, (2) what remains unfinished.";
+
+/**
+ * Path prefix `DefaultResourceLoader` assigns to extensions loaded from an
+ * inline `ExtensionFactory` (as opposed to a file on disk). pi-imps registers
+ * exactly one such inline extension per imp session (the empty-error
+ * normalizer below), so this prefix uniquely identifies it.
+ */
+const INLINE_EXTENSION_PATH_PREFIX = "<inline:";
+
+/**
+ * True when a nominally-failed tool result carries no meaningful content:
+ * no content blocks, or only empty/whitespace text blocks. Image content
+ * always counts as meaningful.
+ */
+function isEmptyToolResultContent(content: ToolResultEvent["content"]): boolean {
+  if (content.length === 0) return true;
+  return content.every((block) => block.type === "text" && block.text.trim() === "");
+}
+
+/**
+ * Named `tool_result` handler that normalizes empty error results before
+ * provider serialization. Left as a standalone named function (rather than
+ * inline arrow) so it's identifiable in stack traces / debugging.
+ */
+export function normalizeEmptyToolError(event: ToolResultEvent): ToolResultEventResult | void {
+  if (!event.isError) return;
+  if (!isEmptyToolResultContent(event.content)) return;
+  return {
+    content: [{ type: "text", text: `Tool "${event.toolName}" failed without an error message` }],
+  };
+}
+
+/**
+ * Build the hidden inline extension that registers `normalizeEmptyToolError`
+ * on every imp child session. Not user-visible, provides no LLM-callable
+ * tools, and is never persisted or logged.
+ */
+function createEmptyErrorNormalizerExtension(): ExtensionFactory {
+  return (pi) => {
+    pi.on("tool_result", normalizeEmptyToolError);
+  };
+}
 
 export interface SpawnImpSessionOptions {
   task: string;
@@ -91,6 +136,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     noPromptTemplates: true,
     noThemes: true,
     systemPrompt: systemPrompt || undefined,
+    extensionFactories: [createEmptyErrorNormalizerExtension()],
     extensionsOverride: (base) => ({
       ...base,
       extensions: base.extensions.filter((ext) =>
@@ -324,6 +370,11 @@ export function shouldIncludeExtension(
   additionalExtensions: string[],
   name?: string,
 ): boolean {
+  // Inline extensions registered by pi-imps itself (e.g. the empty-error
+  // normalizer) always load: they provide no LLM-callable tools and would
+  // otherwise be filtered out by an allowlist.
+  if (ext.path.startsWith(INLINE_EXTENSION_PATH_PREFIX)) return true;
+
   const extName = name ?? getExtensionPackageName(ext);
 
   // Always exclude ourselves (no recursion)
