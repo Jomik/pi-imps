@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.0](https://github.com/Jomik/pi-imps/compare/v0.6.0...v0.7.0) (2026-09-06)
+
+
+### Features
+
+* add project imp tool grants UI ([#18](https://github.com/Jomik/pi-imps/issues/18)) ([54e3d6c](https://github.com/Jomik/pi-imps/commit/54e3d6c40f0e56daab316666bafecbce81e4c54b))
+* **thinking:** inherit parent thinking level for imps ([ffe61ef](https://github.com/Jomik/pi-imps/commit/ffe61ef89359ff15c9ce423f21e3eb61f33dc153))
+* **tui:** show summon task previews ([2eda0d2](https://github.com/Jomik/pi-imps/commit/2eda0d24a51227df330097550afdbbf810c3f5c0))
+
+
+### Bug Fixes
+
+* cache available agents block per session ([#17](https://github.com/Jomik/pi-imps/issues/17)) ([a9e76b4](https://github.com/Jomik/pi-imps/commit/a9e76b41d9f15893a17150668330993bcbe8cc88))
+* resolve imp extension package name independent of sourceInfo timing ([178e912](https://github.com/Jomik/pi-imps/commit/178e91246f23bf4cc09c52a4c9a11ecd8ea88dc7))
+* **session:** surface provider failures from imp runs ([7e02c3d](https://github.com/Jomik/pi-imps/commit/7e02c3d06e3229fb5e72817b68261f8cbcbc7e6e))
+* surface and normalize imp failures ([#21](https://github.com/Jomik/pi-imps/issues/21)) ([4e253e4](https://github.com/Jomik/pi-imps/commit/4e253e44b60f1b8aa4dad85b3e950484ff0b960e))
+* surface imp runtime and configuration errors ([#20](https://github.com/Jomik/pi-imps/issues/20)) ([5cd841c](https://github.com/Jomik/pi-imps/commit/5cd841cc7459a1c1ebdc4cd8c588e986e06cd640))
+* **thinking:** honor agent thinking level ([#19](https://github.com/Jomik/pi-imps/issues/19)) ([0026f43](https://github.com/Jomik/pi-imps/commit/0026f436e7f4e364467e44bc2b7c7aaa4e3b0818))
+
 ## [0.6.0](https://github.com/Jomik/pi-imps/compare/v0.5.0...v0.6.0) (2026-05-24)
 
 
