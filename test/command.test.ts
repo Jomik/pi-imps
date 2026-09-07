@@ -589,7 +589,7 @@ describe("handler: grant flow", () => {
     const agents = makeAgents("mason");
     const pi = makePi(["bash"], []);
     const cmd = createImpsCommand(pi, agents, makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", "Done"]);
+    const { ctx, select } = makeCtx(tmpDir, ["OK", "Grant project tool", "Done"]);
     await cmd.handler("tools mason", ctx);
     expect(select.mock.calls.some((c) => c[0] === "No project tools are available to grant.")).toBe(true);
   });
@@ -626,7 +626,7 @@ describe("handler: remove flow", () => {
     const agents = makeAgents("mason");
     const pi = makePi(["bash"], []); // stale_unregistered no longer registered/in query
     const cmd = createImpsCommand(pi, agents, makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Remove project grant", undefined, "Done"]);
+    const { ctx, select } = makeCtx(tmpDir, ["OK", "Remove project grant", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
 
     const removeCall = select.mock.calls.find((c) => c[0] === "Select a project grant to remove");
@@ -639,7 +639,7 @@ describe("handler: remove flow", () => {
     const settings = makeSettings({ mason: ["bash"] }, []); // bash also globally granted; empty allowlist avoids a default badge
     const pi = makePi(["bash"], []);
     const cmd = createImpsCommand(pi, agents, settings);
-    const { ctx, select } = makeCtx(tmpDir, ["Remove project grant", "bash (still available via: global)", "Done"]);
+    const { ctx, select } = makeCtx(tmpDir, ["OK", "Remove project grant", "bash (still available via: global)", "Done"]);
     await cmd.handler("tools mason", ctx);
 
     const config = settingsModule.loadProjectConfig(tmpDir);
@@ -662,7 +662,7 @@ describe("handler: remove flow", () => {
     const agents = makeAgents("mason", "sentinel");
     const pi = makePi(["run_tests"], []);
     const cmd = createImpsCommand(pi, agents, makeSettings({}, [])); // empty allowlist avoids a default badge on run_tests
-    const { ctx } = makeCtx(tmpDir, ["Remove project grant", "run_tests", "Done"]);
+    const { ctx } = makeCtx(tmpDir, ["OK", "Remove project grant", "run_tests", "Done"]);
     await cmd.handler("tools mason", ctx);
 
     const config = settingsModule.loadProjectConfig(tmpDir);
@@ -677,7 +677,7 @@ describe("handler: remove flow", () => {
     const agents = makeAgents("mason");
     const pi = makePi(["bash"], []);
     const cmd = createImpsCommand(pi, agents, makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Remove project grant", "Done"]);
+    const { ctx, select } = makeCtx(tmpDir, ["OK", "Remove project grant", "Done"]);
     await cmd.handler("tools mason", ctx);
     expect(select.mock.calls.some((c) => c[0] === "No project grants to remove.")).toBe(true);
   });
@@ -698,14 +698,14 @@ describe("handler: cancellation and Done", () => {
   });
 
   it("exits the loop when 'Done' is selected", async () => {
-    const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings());
+    const cmd = createImpsCommand(makePi(["bash"], ["bash"]), makeAgents("mason"), makeSettings());
     const { ctx, select } = makeCtx(tmpDir, ["Done"]);
     await cmd.handler("tools mason", ctx);
     expect(select).toHaveBeenCalledTimes(1);
   });
 
   it("exits the loop when the main menu selection is cancelled (undefined)", async () => {
-    const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings());
+    const cmd = createImpsCommand(makePi(["bash"], ["bash"]), makeAgents("mason"), makeSettings());
     const { ctx, select } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("tools mason", ctx);
     expect(select).toHaveBeenCalledTimes(1);
@@ -743,7 +743,7 @@ describe("handler: write failures", () => {
       throw new Error("disk full");
     });
     const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings({}, []));
-    const { ctx, select } = makeCtx(tmpDir, ["Remove project grant", "bash", "Done"]);
+    const { ctx, select } = makeCtx(tmpDir, ["OK", "Remove project grant", "bash", "Done"]);
     await cmd.handler("tools mason", ctx);
     expect(select.mock.calls.some((c) => c[0] === "Failed to update project config: disk full")).toBe(true);
   });
