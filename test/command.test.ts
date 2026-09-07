@@ -201,7 +201,14 @@ describe("computeGrantCandidates", () => {
   });
 
   it("excludes query tools that are not registered in the session", () => {
-    const result = computeGrantCandidates(["unregistered_tool"], new Set(["bash"]), new Set(), new Set(), new Set(), new Set());
+    const result = computeGrantCandidates(
+      ["unregistered_tool"],
+      new Set(["bash"]),
+      new Set(),
+      new Set(),
+      new Set(),
+      new Set(),
+    );
     expect(result).toEqual([]);
   });
 
@@ -386,39 +393,44 @@ describe("handler argument validation", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("shows usage info for empty args (no subcommand)", async () => {
+  it("shows usage dialog for empty args (no subcommand)", async () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, notify } = makeCtx(tmpDir);
+    const { ctx, select } = makeCtx(tmpDir);
     await cmd.handler("", ctx);
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Usage"), "info");
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledWith(expect.stringContaining("Usage"), ["OK"]);
   });
 
-  it("shows usage info for an unknown subcommand", async () => {
+  it("shows usage dialog for an unknown subcommand", async () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, notify } = makeCtx(tmpDir);
+    const { ctx, select } = makeCtx(tmpDir);
     await cmd.handler("list", ctx);
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Usage"), "info");
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledWith(expect.stringContaining("Usage"), ["OK"]);
   });
 
-  it("shows usage info for 'tools' without an agent name", async () => {
+  it("shows usage dialog for 'tools' without an agent name", async () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, notify } = makeCtx(tmpDir);
+    const { ctx, select } = makeCtx(tmpDir);
     await cmd.handler("tools", ctx);
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Usage"), "info");
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledWith(expect.stringContaining("Usage"), ["OK"]);
   });
 
-  it("shows a warning for an unknown agent name", async () => {
+  it("shows an 'unknown agent' dialog for an unknown agent name", async () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, notify } = makeCtx(tmpDir);
+    const { ctx, select } = makeCtx(tmpDir);
     await cmd.handler("tools sentinel", ctx);
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Unknown agent"), "warning");
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledWith(expect.stringContaining("Unknown agent"), ["OK"]);
   });
 
-  it("shows usage info for extra arguments after agent name", async () => {
+  it("shows usage dialog for extra arguments after agent name", async () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, notify } = makeCtx(tmpDir);
+    const { ctx, select } = makeCtx(tmpDir);
     await cmd.handler("tools mason extra", ctx);
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Usage"), "info");
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledWith(expect.stringContaining("Usage"), ["OK"]);
   });
 
   it("works with an RPC-style context (no TUI mode guard) — reaches the select-based loop", async () => {

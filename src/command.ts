@@ -202,23 +202,23 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
       const agentName = parts[1];
 
       if (subcommand !== "tools") {
-        ctx.ui.notify(`Usage: ${USAGE}`, "info");
+        await showDialogMessage(ctx, `Usage: ${USAGE}`);
         return;
       }
 
       if (!agentName) {
-        ctx.ui.notify(`Usage: ${USAGE}`, "info");
+        await showDialogMessage(ctx, `Usage: ${USAGE}`);
         return;
       }
 
       if (parts.length > 2) {
-        ctx.ui.notify(`Usage: ${USAGE}`, "info");
+        await showDialogMessage(ctx, `Usage: ${USAGE}`);
         return;
       }
 
       const agent = agents.find((a) => a.name === agentName);
       if (!agent) {
-        ctx.ui.notify(`Unknown agent: "${agentName}". Usage: ${USAGE}`, "warning");
+        await showDialogMessage(ctx, `Unknown agent: "${agentName}". Usage: ${USAGE}`);
         return;
       }
 
