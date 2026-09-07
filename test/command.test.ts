@@ -639,7 +639,12 @@ describe("handler: remove flow", () => {
     const settings = makeSettings({ mason: ["bash"] }, []); // bash also globally granted; empty allowlist avoids a default badge
     const pi = makePi(["bash"], []);
     const cmd = createImpsCommand(pi, agents, settings);
-    const { ctx, select } = makeCtx(tmpDir, ["OK", "Remove project grant", "bash (still available via: global)", "Done"]);
+    const { ctx, select } = makeCtx(tmpDir, [
+      "OK",
+      "Remove project grant",
+      "bash (still available via: global)",
+      "Done",
+    ]);
     await cmd.handler("tools mason", ctx);
 
     const config = settingsModule.loadProjectConfig(tmpDir);
