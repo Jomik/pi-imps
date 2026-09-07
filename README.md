@@ -93,7 +93,7 @@ Agent frontmatter cannot override additional extensions.
 
 #### `/imps tools <agent-name>`
 
-Open an interactive TUI to manage per-project additive tool grants for a named agent.
+Manage per-project additive tool grants for a named agent through standard selection dialogs. Works identically in the interactive TUI and in RPC clients such as Paseo — no custom terminal UI.
 
 ```
 /imps tools mason
@@ -101,33 +101,17 @@ Open an interactive TUI to manage per-project additive tool grants for a named a
 
 The agent name autocompletes from discovered agents. Unknown subcommands show usage guidance; unknown agent names produce an explicit warning.
 
-The picker shows every registered tool exactly once across two side-by-side searchable columns.
+On invocation, pi-imps queries `pi-armory` (via extension `pi.events`) for this project's configured Armory tool names. If Armory isn't installed or is incompatible, or if it's installed but the project has no configured tools, a dialog reports which case applies before continuing.
 
-**Granted** — tools that have at least one source. Each tool displays all applicable source badges:
+The first selection offers:
 
-| Badge | Source |
-|-------|--------|
-| `[agent]` | Agent frontmatter `tools` |
-| `[default]` | Fallback baseline: `toolAllowlist` from global settings, or all tools when neither is configured |
-| `[global]` | Per-agent grant from `~/.pi/agent/imps.json` |
-| `[project]` | Per-agent grant from `.pi/imps.json` (this project) |
+- **Grant project tool** — pick from project Armory tools that are registered in the parent session and not already available to the agent via frontmatter `tools`, the default allowlist, or global/project grants.
+- **Remove project grant** — pick from every current project grant, including stale or currently unregistered names, so obsolete grants remain removable. Options show any `agent`, `default`, or `global` sources that will keep providing access after the project grant is removed.
+- **Done** — close.
 
-`[agent]` and `[default]` are mutually exclusive. Only `[project]` grants are editable here. Granted tools without a `[project]` badge are read-only — pressing Enter on them has no effect.
+Each change is persisted immediately to `.pi/imps.json` and affects subsequently summoned imps. Removing a project grant removes only that source; access from another source is unaffected. Existing settings for other agents and unrecognized tool names are preserved. Read or write failures are reported through a dialog and never overwrite the existing config.
 
-**Available** — registered tools with no source. Press Enter to add a project grant and move the tool to Granted.
-
-Each move is persisted immediately to `.pi/imps.json` and affects subsequently summoned imps. Tools already present in `.pi/imps.json` that are not currently registered in the session are preserved on every write.
-
-| Key | Action |
-|-----|--------|
-| `← →` or `Tab` | Switch active column |
-| `↑ ↓` or type | Navigate / search within column |
-| `Enter` or `Space` | Add or remove the selected tool's `[project]` grant |
-| `Esc` | Close |
-
-> **Project grants are additive.** Removing a `[project]` grant cannot revoke access provided by `[agent]`, `[default]`, or `[global]` sources — the tool remains Granted with updated badges. The TUI only edits `.pi/imps.json`. Project grants also have no effect when the agent's base already allows all tools (no frontmatter `tools` and no global `toolAllowlist`).
-
-Requires interactive mode (TUI). Not available in print or RPC mode.
+> **Project grants are additive.** Removing a project grant cannot revoke access provided by `agent`, `default`, or `global` sources. Project grants also have no effect when the agent's base already allows all tools (no frontmatter `tools` and no global `toolAllowlist`).
 
 ### Turn limit
 
