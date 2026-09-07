@@ -68,12 +68,17 @@ function makePi(toolNames: string[], armoryProjectTools?: string[]) {
   } as unknown as ExtensionAPI;
 }
 
-/** Create a minimal ExtensionCommandContext mock with scriptable ui.select. */
-function makeCtx(cwd: string, selectResponses: (string | undefined)[] = []) {
+/**
+ * Create a minimal ExtensionCommandContext mock with scriptable ui.select.
+ *
+ * `hasUI` defaults to `true` (interactive TUI and RPC clients such as Paseo both have
+ * `ctx.hasUI === true`). Pass `false` to model print/JSON modes with no UI.
+ */
+function makeCtx(cwd: string, selectResponses: (string | undefined)[] = [], hasUI = true) {
   const notify = vi.fn();
   const responses = [...selectResponses];
   const select = vi.fn(async (_title: string, _options: string[]) => responses.shift());
-  const ctx = { cwd, ui: { notify, select } } as unknown as ExtensionCommandContext;
+  const ctx = { cwd, hasUI, ui: { notify, select } } as unknown as ExtensionCommandContext;
   return { ctx, notify, select };
 }
 
@@ -438,6 +443,24 @@ describe("handler argument validation", () => {
     const { ctx, select } = makeCtx(tmpDir, ["Done"]);
     await cmd.handler("tools mason", ctx);
     expect(select).toHaveBeenCalled();
+  });
+
+  it("reaches the select flow when hasUI is true and there is no legacy mode property (RPC-compatible)", async () => {
+    const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings());
+    const { ctx, select } = makeCtx(tmpDir, ["Done"], true);
+    await cmd.handler("tools mason", ctx);
+    expect(select).toHaveBeenCalled();
+  });
+
+  it("returns immediately without any dialogs, Armory emit, or config side effects when hasUI is false", async () => {
+    const pi = makePi(["bash"], []);
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings());
+    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", "bash", "Done"], false);
+    await cmd.handler("tools mason", ctx);
+    expect(select).not.toHaveBeenCalled();
+    expect(pi.events.emit).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -197,6 +197,10 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
     },
 
     async handler(args: string, ctx: ExtensionCommandContext): Promise<void> {
+      // No UI (print/JSON modes) — nothing to show. RPC clients (e.g. Paseo) have
+      // ctx.hasUI === true and continue to the standard select flow below.
+      if (!ctx.hasUI) return;
+
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const subcommand = parts[0];
       const agentName = parts[1];
