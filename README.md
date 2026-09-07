@@ -93,13 +93,13 @@ Agent frontmatter cannot override additional extensions.
 
 #### `/imps tools <agent-name>`
 
-Manage per-project additive tool grants for a named agent through standard selection dialogs. Works identically in the interactive TUI and in RPC clients such as Paseo — no custom terminal UI.
+Manage per-project additive tool grants for a named agent through standard selection dialogs. Works identically in the interactive TUI and in RPC clients such as Paseo — no custom terminal UI. Unavailable in print/JSON modes, where no host UI exists — the command returns immediately without querying or touching config.
 
 ```
 /imps tools mason
 ```
 
-The agent name autocompletes from discovered agents. Unknown subcommands show usage guidance; unknown agent names produce an explicit warning.
+The agent name autocompletes from discovered agents. Unknown subcommands, a missing agent name, and extra trailing arguments all show usage guidance; an unknown agent name produces an explicit warning.
 
 On invocation, pi-imps queries `pi-armory` (via extension `pi.events`) for this project's configured Armory tool names. If Armory isn't installed or is incompatible, or if it's installed but the project has no configured tools, a dialog reports which case applies before continuing.
 

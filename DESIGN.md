@@ -135,7 +135,7 @@ This allows projects to grant agents access to project-specific tools (e.g. armo
 
 #### Project tool grants UI
 
-The `/imps tools <agent-name>` command provides a standard-dialog flow for managing project-level additive tool grants in both the interactive TUI and RPC clients such as Paseo. It uses only the host's selection dialogs, not custom terminal UI. The agent-name argument offers completion from discovered agents. A missing name produces usage guidance; an unknown name produces an explicit warning. Neither opens another selection step.
+The `/imps tools <agent-name>` command provides a standard-dialog flow for managing project-level additive tool grants in both the interactive TUI and RPC clients such as Paseo. It uses only the host's selection dialogs, not custom terminal UI. It is unavailable in print/JSON modes, where no host UI exists — the handler returns immediately without any query or config side effects. The agent-name argument offers completion from discovered agents. A missing name produces usage guidance; an unknown name produces an explicit warning. Neither opens another selection step.
 
 When invoked, pi-imps synchronously queries `pi-armory:project-tools:v1`. Armory responds exactly once with names read directly from the current project's `.pi/armory.json`; global and session-only Armory tools are excluded, while project names remain present when shadowed by session tools. No response means Armory is absent or incompatible; an empty response means Armory is present but the project config contains no tools. The result is consumed immediately and never cached.
 
