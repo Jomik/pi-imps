@@ -91,21 +91,21 @@ Agent frontmatter cannot override additional extensions.
 
 ### Commands
 
-#### `/imps tools <agent-name>`
+#### `/imps tools [agent-name]`
 
 Manage per-project additive tool grants for a named agent through standard selection dialogs. Works identically in the interactive TUI and in RPC clients such as Paseo — no custom terminal UI. Unavailable in print/JSON modes, where no host UI exists — the command returns immediately without querying or touching config.
 
 ```
 /imps tools mason
+/imps tools
 ```
 
-The agent name autocompletes from discovered agents. Unknown subcommands, a missing agent name, and extra trailing arguments all show usage guidance; an unknown agent name produces an explicit warning.
-
-On invocation, pi-imps queries `pi-armory` (via extension `pi.events`) for this project's configured Armory tool names. If Armory isn't installed or is incompatible, or if it's installed but the project has no configured tools, a dialog reports which case applies before continuing.
+The agent name autocompletes from discovered agents and is optional. When omitted, an agent selector dialog lists all discovered agent names sorted alphabetically; cancelling it exits, and if no agents are discovered the command reports that and exits. Unknown subcommands and extra trailing arguments show usage guidance; an unknown explicit agent name produces an explicit warning.
 
 The first selection offers:
 
-- **Grant project tool** — pick from project Armory tools that are registered in the parent session and not already available to the agent via frontmatter `tools`, the default allowlist, or global/project grants.
+- **List granted tools** — a dialog listing every currently registered tool the agent would receive if summoned now, sorted by name, with all applicable source badges (`agent`, `default`, `global`, `project`). Reports a concise empty state when no tools would be granted.
+- **Grant project tool** — queries `pi-armory` (via extension `pi.events`) fresh for this project's configured Armory tool names, then offers project Armory tools that are registered in the parent session and not already available to the agent via frontmatter `tools`, the default allowlist, or global/project grants. If Armory isn't installed or is incompatible, or if it's installed but the project has no configured tools, a dialog reports which case applies and returns to the menu.
 - **Remove project grant** — pick from every current project grant, including stale or currently unregistered names, so obsolete grants remain removable. Options show any `agent`, `default`, or `global` sources that will keep providing access after the project grant is removed.
 - **Done** — close.
 

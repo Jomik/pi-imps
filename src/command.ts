@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { loadProjectConfig, updateProjectAgentTools } from "./settings.js";
 import type { AgentConfig, ImpSettings } from "./types.js";
 
-const USAGE = "/imps tools <agent-name>";
+const USAGE = "/imps tools [agent-name]";
 
 /** Armory contract: synchronous, exactly-once, uncached query for this project's configured tool names. */
 const PROJECT_TOOLS_EVENT = "pi-armory:project-tools:v1";
@@ -157,6 +157,35 @@ function formatRemoveLabel(toolName: string, remainingSources: readonly string[]
   return `${toolName} (still available via: ${remainingSources.join(", ")})`;
 }
 
+/**
+ * Compute the effective set of currently registered tools an agent would receive
+ * if summoned now: explicit agent tools, otherwise the default allowlist, otherwise
+ * every registered parent tool; unioned with global and project grants; intersected
+ * with currently registered tools (excluding configured-but-unregistered names).
+ *
+ * Sorted for stable display order. Exported for testing.
+ */
+export function computeEffectiveTools(
+  agentTools: ReadonlySet<string>,
+  defaultTools: ReadonlySet<string>,
+  globalTools: ReadonlySet<string>,
+  projectTools: ReadonlySet<string>,
+  registeredToolNames: ReadonlySet<string>,
+): string[] {
+  const union = new Set<string>([...agentTools, ...defaultTools, ...globalTools, ...projectTools]);
+  const effective: string[] = [];
+  for (const name of union) {
+    if (registeredToolNames.has(name)) effective.push(name);
+  }
+  return effective.sort();
+}
+
+/** Format a List option's label with all applicable source badges. */
+function formatListLabel(toolName: string, badges: readonly string[]): string {
+  if (badges.length === 0) return toolName;
+  return `${toolName} (${badges.join(", ")})`;
+}
+
 const DIALOG_OK = ["OK"];
 
 /** Show a one-shot informational/error dialog through the standard select UI, so RPC clients (e.g. Paseo) can display it. */
@@ -167,10 +196,11 @@ async function showDialogMessage(ctx: ExtensionCommandContext, message: string):
 /**
  * Create the `/imps` command registration options.
  *
- * Only the `tools <agent-name>` subcommand is supported. Missing or unknown
- * subcommands / agent names produce concise usage guidance. The tools flow
- * uses only standard `ctx.ui.select` dialogs, so it works identically in the
- * interactive TUI and in RPC clients such as Paseo.
+ * Only the `tools [agent-name]` subcommand is supported. When the agent name
+ * is omitted, an agent selector dialog is shown; cancellation exits. Missing
+ * subcommands / unknown agent names produce concise usage guidance. The tools
+ * flow uses only standard `ctx.ui.select` dialogs, so it works identically in
+ * the interactive TUI and in RPC clients such as Paseo.
  */
 export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], settings: ImpSettings) {
   return {
@@ -203,14 +233,9 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
 
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const subcommand = parts[0];
-      const agentName = parts[1];
+      const explicitAgentName = parts[1];
 
       if (subcommand !== "tools") {
-        await showDialogMessage(ctx, `Usage: ${USAGE}`);
-        return;
-      }
-
-      if (!agentName) {
         await showDialogMessage(ctx, `Usage: ${USAGE}`);
         return;
       }
@@ -220,11 +245,26 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
         return;
       }
 
-      const agent = agents.find((a) => a.name === agentName);
-      if (!agent) {
-        await showDialogMessage(ctx, `Unknown agent: "${agentName}". Usage: ${USAGE}`);
-        return;
+      let agent: AgentConfig;
+      if (explicitAgentName) {
+        const found = agents.find((a) => a.name === explicitAgentName);
+        if (!found) {
+          await showDialogMessage(ctx, `Unknown agent: "${explicitAgentName}". Usage: ${USAGE}`);
+          return;
+        }
+        agent = found;
+      } else {
+        if (agents.length === 0) {
+          await showDialogMessage(ctx, "No agents discovered.");
+          return;
+        }
+        const sortedNames = [...agents].map((a) => a.name).sort();
+        const selectedName = await ctx.ui.select("Select an agent", sortedNames);
+        if (selectedName === undefined) return;
+        // selectedName came from sortedNames, which is derived from agents — always found.
+        agent = agents.find((a) => a.name === selectedName) as AgentConfig;
       }
+      const agentName = agent.name;
 
       // Load project config — report error and abort if malformed. Uses a standard
       // dialog (not notify) so RPC clients like Paseo can see the failure.
@@ -256,25 +296,51 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
       // preserved verbatim on every write.
       let currentProjectTools = new Set<string>(existingProjectToolNames);
 
-      // Synchronous, exactly-once, uncached Armory query.
-      const projectToolNames = queryArmoryProjectTools(pi);
-      if (projectToolNames === undefined) {
-        await showDialogMessage(ctx, "Armory project tools are unavailable (Armory is not installed or incompatible).");
-      } else if (projectToolNames.length === 0) {
-        await showDialogMessage(ctx, "Armory is installed, but this project has no configured tools.");
-      }
-
       for (;;) {
         const action = await ctx.ui.select(`Project tool grants for agent: ${agentName}`, [
+          "List granted tools",
           "Grant project tool",
           "Remove project grant",
           "Done",
         ]);
         if (action === undefined || action === "Done") return;
 
+        if (action === "List granted tools") {
+          const effectiveTools = computeEffectiveTools(
+            agentTools,
+            defaultTools,
+            globalTools,
+            currentProjectTools,
+            registeredToolNames,
+          );
+          if (effectiveTools.length === 0) {
+            await showDialogMessage(ctx, `No tools would be granted to agent "${agentName}" if summoned now.`);
+            continue;
+          }
+          const lines = effectiveTools.map((name) =>
+            formatListLabel(name, computeBadges(name, agentTools, defaultTools, globalTools, currentProjectTools)),
+          );
+          await showDialogMessage(ctx, `Tools granted to agent "${agentName}" if summoned now:\n${lines.join("\n")}`);
+          continue;
+        }
+
         if (action === "Grant project tool") {
+          // Synchronous, exactly-once, uncached Armory query — queried fresh on each
+          // Grant selection, never cached or emitted for other menu actions.
+          const projectToolNames = queryArmoryProjectTools(pi);
+          if (projectToolNames === undefined) {
+            await showDialogMessage(
+              ctx,
+              "Armory project tools are unavailable (Armory is not installed or incompatible).",
+            );
+            continue;
+          }
+          if (projectToolNames.length === 0) {
+            await showDialogMessage(ctx, "Armory is installed, but this project has no configured tools.");
+            continue;
+          }
           const candidates = computeGrantCandidates(
-            projectToolNames ?? [],
+            projectToolNames,
             registeredToolNames,
             agentTools,
             defaultTools,
