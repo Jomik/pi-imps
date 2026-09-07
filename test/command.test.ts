@@ -568,6 +568,19 @@ describe("handler: agent selection (omitted agent name)", () => {
     expect(select).toHaveBeenCalledTimes(1);
     expect(select).toHaveBeenCalledWith(expect.stringContaining("Unknown agent"), ["OK"]);
   });
+
+  it("shows the standard unknown-agent error and stops, without throwing, when the selector returns a name not offered", async () => {
+    const pi = makePi(["bash"], []);
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const cmd = createImpsCommand(pi, makeAgents("sentinel", "mason"), makeSettings());
+    const { ctx, select } = makeCtx(tmpDir, ["ghost"]);
+    await expect(cmd.handler("tools", ctx)).resolves.toBeUndefined();
+    expect(select).toHaveBeenCalledTimes(2);
+    expect(select.mock.calls[0]).toEqual(["Select an agent", ["mason", "sentinel"]]);
+    expect(select).toHaveBeenCalledWith(expect.stringContaining('Unknown agent: "ghost"'), ["OK"]);
+    expect(pi.events.emit).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
 });
 
 // ─── handler: malformed project config ──────────────────────────────────────

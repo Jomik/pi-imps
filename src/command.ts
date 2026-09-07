@@ -261,8 +261,12 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
         const sortedNames = [...agents].map((a) => a.name).sort();
         const selectedName = await ctx.ui.select("Select an agent", sortedNames);
         if (selectedName === undefined) return;
-        // selectedName came from sortedNames, which is derived from agents — always found.
-        agent = agents.find((a) => a.name === selectedName) as AgentConfig;
+        const found = agents.find((a) => a.name === selectedName);
+        if (!found) {
+          await showDialogMessage(ctx, `Unknown agent: "${selectedName}". Usage: ${USAGE}`);
+          return;
+        }
+        agent = found;
       }
       const agentName = agent.name;
 
