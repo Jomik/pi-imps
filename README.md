@@ -93,7 +93,7 @@ Agent frontmatter cannot override additional extensions.
 
 #### `/imps tools [agent-name]`
 
-Manage per-project additive tool grants for a named agent through standard selection dialogs. Works identically in the interactive TUI and in RPC clients such as Paseo — no custom terminal UI. Unavailable in print/JSON modes, where no host UI exists — the command returns immediately without querying or touching config.
+Inspect and manage the selected agent's tool access — including per-project additive tool grants — through standard selection dialogs. Works identically in the interactive TUI and in RPC clients such as Paseo — no custom terminal UI. Unavailable in print/JSON modes, where no host UI exists — the command returns immediately without querying or touching config.
 
 ```
 /imps tools mason
