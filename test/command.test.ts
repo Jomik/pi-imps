@@ -109,8 +109,8 @@ const DRIVE_KEYS = Symbol("driveKeys");
  * with actual terminal key sequences, instead of resolving the dialog with a scripted
  * value. The harness feeds each key to `component.handleInput(key)` in order and lets
  * the component's own `done` callback (wired to the factory by the real command code)
- * resolve the surrounding promise — exercising the genuine toggle/apply/cancel wiring
- * rather than duplicating it in the test.
+ * resolve the surrounding promise — exercising the genuine toggle/close wiring rather
+ * than duplicating it in the test.
  */
 function driveKeys(...keys: string[]): { [DRIVE_KEYS]: string[] } {
   return { [DRIVE_KEYS]: keys };
@@ -870,7 +870,7 @@ describe("handler: Armory query messaging (Grant action only)", () => {
       "Grant project tools",
       undefined,
       "Grant project tools",
-      ["run_tests"],
+      driveKeys(" ", "\x1b"),
       "Done",
     ]);
 
@@ -983,18 +983,20 @@ describe("handler: grant flow", () => {
     expect(grantScreen).not.toContain("unregistered_missing");
   });
 
-  it("applies selected grants together with a single config write and returns to the action loop", async () => {
+  it("each toggle persists immediately as its own atomic write, and the loop returns to the main menu after Escape", async () => {
     const agents = makeAgents("mason");
     const pi = makePi(["run_tests", "run_checks"], ["run_tests", "run_checks"]);
     const cmd = createImpsCommand(pi, agents, makeSettings({}, [])); // empty allowlist: nothing already available by default
     const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
-    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", ["run_tests", "run_checks"], "Done"]);
+    // Candidates sorted: ["run_checks", "run_tests"]. Toggle run_checks granted, then Escape
+    // closes the screen — there is no separate apply step.
+    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
 
     expect(updateSpy).toHaveBeenCalledTimes(1);
     const config = settingsModule.loadProjectConfig(tmpDir);
-    expect(config.agents?.mason?.tools?.sort()).toEqual(["run_checks", "run_tests"]);
-    // Loop continued: main menu was shown again (twice total — before and after the grant).
+    expect(config.agents?.mason?.tools).toEqual(["run_checks"]);
+    // Loop continued: main menu was shown again after Escape closed the grant screen.
     const mainMenuScreens = rendered.filter((lines) => text(lines).includes("Project tool grants for agent: mason"));
     expect(mainMenuScreens.length).toBe(2);
   });
@@ -1016,16 +1018,6 @@ describe("handler: grant flow", () => {
     await cmd.handler("tools mason", ctx);
     const config = settingsModule.loadProjectConfig(tmpDir);
     expect(config.agents?.mason?.tools ?? []).toEqual([]);
-  });
-
-  it("applying with an empty selection persists nothing", async () => {
-    const agents = makeAgents("mason");
-    const pi = makePi(["run_tests"], ["run_tests"]);
-    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
-    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
-    const { ctx } = makeCtx(tmpDir, ["Grant project tools", [], "Done"]);
-    await cmd.handler("tools mason", ctx);
-    expect(updateSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -1062,7 +1054,7 @@ describe("handler: remove flow", () => {
     const settings = makeSettings({ mason: ["bash"] }, []); // bash also globally granted; empty allowlist avoids a default badge
     const pi = makePi(["bash"], []);
     const cmd = createImpsCommand(pi, agents, settings);
-    const { ctx, rendered } = makeCtx(tmpDir, ["Remove project grants", ["bash"], "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
 
     expect(text(rendered[1])).toContain("bash (still available via: global)");
@@ -1070,7 +1062,7 @@ describe("handler: remove flow", () => {
     expect(config.agents?.mason?.tools ?? []).toEqual([]);
   });
 
-  it("applies selected removals together with a single config write", async () => {
+  it("each removal toggle persists immediately; toggling two rows writes twice", async () => {
     writeFileSync(
       join(piDir, "imps.json"),
       JSON.stringify({ agents: { mason: { tools: ["run_tests", "run_checks"] } } }),
@@ -1079,10 +1071,10 @@ describe("handler: remove flow", () => {
     const pi = makePi(["run_tests", "run_checks"], []);
     const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
     const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
-    const { ctx } = makeCtx(tmpDir, ["Remove project grants", ["run_tests", "run_checks"], "Done"]);
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b[B", " ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
 
-    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy).toHaveBeenCalledTimes(2);
     const config = settingsModule.loadProjectConfig(tmpDir);
     expect(config.agents?.mason?.tools ?? []).toEqual([]);
   });
@@ -1101,7 +1093,7 @@ describe("handler: remove flow", () => {
     const agents = makeAgents("mason", "sentinel");
     const pi = makePi(["run_tests"], []);
     const cmd = createImpsCommand(pi, agents, makeSettings({}, [])); // empty allowlist avoids a default badge on run_tests
-    const { ctx } = makeCtx(tmpDir, ["Remove project grants", ["run_tests"], "Done"]);
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
 
     const config = settingsModule.loadProjectConfig(tmpDir);
@@ -1133,9 +1125,9 @@ describe("handler: remove flow", () => {
   });
 });
 
-// ─── handler: real multiSelectTools key-driven interaction ─────────────────
+// ─── handler: grant/remove toggle interaction (Enter/Space toggle, immediate persistence) ──
 
-describe("handler: real multiSelectTools key-driven interaction", () => {
+describe("handler: grant/remove toggle interaction (Enter/Space toggle, immediate persistence)", () => {
   let tmpDir: string;
   let piDir: string;
 
@@ -1149,33 +1141,7 @@ describe("handler: real multiSelectTools key-driven interaction", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("grant: Space toggles multiple rows and Ctrl+S applies them with a single config write", async () => {
-    const agents = makeAgents("mason");
-    const pi = makePi(["a_tool", "b_tool"], ["a_tool", "b_tool"]);
-    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
-    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
-    // Candidates sorted: ["a_tool", "b_tool"]. Space toggles a_tool selected, down
-    // moves to b_tool, space toggles it selected too, ctrl+s applies both.
-    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b[B", " ", "\x13"), "Done"]);
-    await cmd.handler("tools mason", ctx);
-
-    expect(updateSpy).toHaveBeenCalledTimes(1);
-    const config = settingsModule.loadProjectConfig(tmpDir);
-    expect(config.agents?.mason?.tools?.sort()).toEqual(["a_tool", "b_tool"]);
-  });
-
-  it("grant: Enter also toggles a row (not just Space)", async () => {
-    const agents = makeAgents("mason");
-    const pi = makePi(["a_tool"], ["a_tool"]);
-    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
-    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys("\r", "\x13"), "Done"]);
-    await cmd.handler("tools mason", ctx);
-
-    const config = settingsModule.loadProjectConfig(tmpDir);
-    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
-  });
-
-  it("grant: Escape cancels after a pending toggle, with no config write", async () => {
+  it("grant: Space toggles the highlighted row on and persists it immediately", async () => {
     const agents = makeAgents("mason");
     const pi = makePi(["a_tool"], ["a_tool"]);
     const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
@@ -1183,26 +1149,66 @@ describe("handler: real multiSelectTools key-driven interaction", () => {
     const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
 
-    expect(updateSpy).not.toHaveBeenCalled();
+    expect(updateSpy).toHaveBeenCalledTimes(1);
     const config = settingsModule.loadProjectConfig(tmpDir);
-    expect(config.agents?.mason?.tools ?? []).toEqual([]);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
   });
 
-  it("remove: Space toggles multiple rows and Ctrl+S applies them with a single config write", async () => {
-    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool", "b_tool"] } } }));
+  it("grant: Enter toggles the highlighted row on and persists it immediately (native SettingsList semantics)", async () => {
     const agents = makeAgents("mason");
-    const pi = makePi(["a_tool", "b_tool"], []);
+    const pi = makePi(["a_tool"], ["a_tool"]);
     const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
     const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
-    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b[B", " ", "\x13"), "Done"]);
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys("\r", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
 
     expect(updateSpy).toHaveBeenCalledTimes(1);
     const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
+  });
+
+  it("grant: toggling two rows writes once per toggle", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool", "b_tool"], ["a_tool", "b_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    // Candidates sorted: ["a_tool", "b_tool"]. Toggle a_tool on, move down, toggle b_tool on.
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b[B", " ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools?.sort()).toEqual(["a_tool", "b_tool"]);
+  });
+
+  it("grant: toggling a row on then back off during the same screen persists both writes, ending ungranted", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], ["a_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", " ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
     expect(config.agents?.mason?.tools ?? []).toEqual([]);
   });
 
-  it("remove: Escape cancels after a pending toggle, with no config write", async () => {
+  it("grant: Escape closes the screen without undoing an already-applied toggle", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], ["a_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
+    // Loop continued to the main menu after Escape closed the grant screen.
+    const mainMenuScreens = rendered.filter((lines) => text(lines).includes("Project tool grants for agent: mason"));
+    expect(mainMenuScreens.length).toBe(2);
+  });
+
+  it("remove: Space toggles the highlighted row to removed and persists it immediately", async () => {
     writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool"] } } }));
     const agents = makeAgents("mason");
     const pi = makePi(["a_tool"], []);
@@ -1211,9 +1217,49 @@ describe("handler: real multiSelectTools key-driven interaction", () => {
     const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
 
-    expect(updateSpy).not.toHaveBeenCalled();
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
+  });
+
+  it("remove: toggling two rows writes once per toggle", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool", "b_tool"] } } }));
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool", "b_tool"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b[B", " ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
+  });
+
+  it("remove: toggling a row to removed then back to kept during the same screen restores the grant", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool"] } } }));
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", " ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(2);
     const config = settingsModule.loadProjectConfig(tmpDir);
     expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
+  });
+
+  it("remove: Escape closes the screen without undoing an already-applied removal", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool"] } } }));
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
   });
 });
 
@@ -1261,25 +1307,47 @@ describe("handler: write failures", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows a dialog on grant persistence failure and keeps the loop open", async () => {
-    vi.spyOn(settingsModule, "updateProjectAgentTools").mockImplementation(() => {
+  it("grant: a failed write leaves currentProjectTools unchanged, reverts the row, and notifies without closing the dialog", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], ["a_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const realUpdate = settingsModule.updateProjectAgentTools;
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    updateSpy.mockImplementationOnce(() => {
       throw new Error("disk full");
     });
-    const cmd = createImpsCommand(makePi(["run_tests"], ["run_tests"]), makeAgents("mason"), makeSettings({}, []));
-    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", ["run_tests"], "Done"]);
+    updateSpy.mockImplementation(realUpdate);
+    const { ctx, notify } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", " ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
-    expect(rendered.some((lines) => text(lines).includes("Failed to update project config: disk full"))).toBe(true);
+
+    // First space fails and reverts the row to "not granted" (the write did not change
+    // currentProjectTools). Notify reports the failure without crashing or closing the
+    // dialog. Because the row was correctly reverted, the second space press retries the
+    // same "grant" direction (not "revoke") and succeeds.
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Failed to update project config: disk full"), "error");
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
   });
 
-  it("shows a dialog on revoke persistence failure and keeps the loop open", async () => {
+  it("remove: a failed write leaves currentProjectTools unchanged, reverts the row, and notifies without closing the dialog", async () => {
     writeFileSync(join(tmpDir, ".pi", "imps.json"), JSON.stringify({ agents: { mason: { tools: ["bash"] } } }));
-    vi.spyOn(settingsModule, "updateProjectAgentTools").mockImplementation(() => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["bash"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const realUpdate = settingsModule.updateProjectAgentTools;
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    updateSpy.mockImplementationOnce(() => {
       throw new Error("disk full");
     });
-    const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings({}, []));
-    const { ctx, rendered } = makeCtx(tmpDir, ["Remove project grants", ["bash"], "Done"]);
+    updateSpy.mockImplementation(realUpdate);
+    const { ctx, notify } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", " ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
-    expect(rendered.some((lines) => text(lines).includes("Failed to update project config: disk full"))).toBe(true);
+
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Failed to update project config: disk full"), "error");
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
   });
 });
 

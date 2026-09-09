@@ -253,24 +253,33 @@ interface MultiSelectOption {
 }
 
 /**
- * Show a searchable multi-selection TUI dialog built from `SettingsList` (fuzzy search
- * enabled). Each option toggles between selected/not-selected with Enter/Space. Selections
- * are only applied when the user presses Ctrl+S; Escape cancels and discards all pending
- * selections. Returns the selected ids on apply, or `undefined` on cancellation — or
- * immediately in RPC/print/JSON modes, where `ctx.ui.custom` degrades to a no-op.
+ * Show a searchable toggle-list TUI dialog built from `SettingsList` (fuzzy search
+ * enabled), using pi's native SettingsList semantics unmodified: Enter or Space toggles
+ * the highlighted row between `values[0]` (off) and `values[1]` (on), immediately
+ * invoking `onToggle` with the row's id and the direction it moved. Escape closes the
+ * dialog (`onCancel`) — it does not undo any toggles already applied.
+ *
+ * `onToggle` is expected to persist the change synchronously and throw on failure. On a
+ * thrown error, the row is reverted to its prior value and the error is reported via
+ * `ctx.ui.notify` without closing the dialog, so the user can keep working the list.
+ *
+ * There is no staged/selected set and no explicit apply step — every toggle is a
+ * standalone, immediately-persisted action.
  */
-async function multiSelectTools(
+async function toggleList(
   ctx: ExtensionCommandContext,
   title: string,
   options: readonly MultiSelectOption[],
-): Promise<string[] | undefined> {
-  return ctx.ui.custom<string[] | undefined>((tui, theme, _kb, done) => {
-    const selected = new Set<string>();
+  values: readonly [off: string, on: string],
+  onToggle: (id: string, turningOn: boolean) => void,
+): Promise<void> {
+  await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+    const [offValue, onValue] = values;
     const items: SettingItem[] = options.map((o) => ({
       id: o.id,
       label: o.label,
-      currentValue: "not selected",
-      values: ["not selected", "selected"],
+      currentValue: offValue,
+      values: [offValue, onValue],
     }));
 
     const container = new Container();
@@ -282,14 +291,21 @@ async function multiSelectTools(
       Math.min(items.length + 2, 15),
       getSettingsListTheme(),
       (id, newValue) => {
-        if (newValue === "selected") selected.add(id);
-        else selected.delete(id);
+        const turningOn = newValue === onValue;
+        try {
+          onToggle(id, turningOn);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          settingsList.updateValue(id, turningOn ? offValue : onValue);
+          tui.requestRender();
+          ctx.ui.notify(`Failed to update project config: ${msg}`, "error");
+        }
       },
       () => done(undefined),
       { enableSearch: true },
     );
     container.addChild(settingsList);
-    const hint = "type to search · space/enter toggle · ctrl+s apply · esc cancel";
+    const hint = "type to search · space/enter toggle · esc close";
     container.addChild(new Text(theme.fg("dim", hint), 1, 0));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
@@ -297,10 +313,6 @@ async function multiSelectTools(
       render: (w: number) => container.render(w),
       invalidate: () => container.invalidate(),
       handleInput: (data: string) => {
-        if (matchesKey(data, Key.ctrl("s"))) {
-          done([...selected]);
-          return;
-        }
         settingsList.handleInput?.(data);
         tui.requestRender();
       },
@@ -472,19 +484,16 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
             continue;
           }
           const options = candidates.map((name) => ({ id: name, label: name }));
-          const picked = await multiSelectTools(ctx, "Grant project tools", options);
-          if (picked === undefined || picked.length === 0) continue;
-
-          const toolsToWrite = new Set(currentProjectTools);
-          for (const name of picked) toolsToWrite.add(name);
-          try {
-            updateProjectAgentTools(ctx.cwd, agentName, [...toolsToWrite]);
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            await showMessage(ctx, `Failed to update project config: ${msg}`);
-            continue;
-          }
-          currentProjectTools = toolsToWrite;
+          // Each toggle persists immediately (one atomic write per toggle); toggling a row
+          // back to "not granted" during the same open screen undoes just that write. A
+          // failed write leaves currentProjectTools untouched and reverts the row's display.
+          await toggleList(ctx, "Grant project tools", options, ["not granted", "granted"], (name, turningOn) => {
+            const toolsToWrite = turningOn
+              ? computeGrantResult(name, currentProjectTools)
+              : computeRevokeResult(name, currentProjectTools);
+            updateProjectAgentTools(ctx.cwd, agentName, toolsToWrite);
+            currentProjectTools = new Set(toolsToWrite);
+          });
           continue;
         }
 
@@ -498,19 +507,16 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
           id: name,
           label: formatRemoveLabel(name, computeBadges(name, agentTools, defaultTools, globalTools, new Set())),
         }));
-        const picked = await multiSelectTools(ctx, "Remove project grants", options);
-        if (picked === undefined || picked.length === 0) continue;
-
-        const toolsToWrite = new Set(currentProjectTools);
-        for (const name of picked) toolsToWrite.delete(name);
-        try {
-          updateProjectAgentTools(ctx.cwd, agentName, [...toolsToWrite]);
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          await showMessage(ctx, `Failed to update project config: ${msg}`);
-          continue;
-        }
-        currentProjectTools = toolsToWrite;
+        // Each toggle persists immediately; toggling a row back to "kept" during the same
+        // open screen re-grants it. A failed write leaves currentProjectTools untouched and
+        // reverts the row's display.
+        await toggleList(ctx, "Remove project grants", options, ["kept", "removed"], (name, turningOn) => {
+          const toolsToWrite = turningOn
+            ? computeRevokeResult(name, currentProjectTools)
+            : computeGrantResult(name, currentProjectTools);
+          updateProjectAgentTools(ctx.cwd, agentName, toolsToWrite);
+          currentProjectTools = new Set(toolsToWrite);
+        });
       }
     },
   };
