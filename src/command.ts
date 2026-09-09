@@ -305,8 +305,6 @@ async function toggleList(
       { enableSearch: true },
     );
     container.addChild(settingsList);
-    const hint = "type to search · space/enter toggle · esc close";
-    container.addChild(new Text(theme.fg("dim", hint), 1, 0));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
     return {
