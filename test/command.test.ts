@@ -102,6 +102,20 @@ const fakeTheme: any = {
   bold: (text: string) => text,
 };
 
+const DRIVE_KEYS = Symbol("driveKeys");
+
+/**
+ * Marks a `customResponses` entry to drive the real returned component's `handleInput`
+ * with actual terminal key sequences, instead of resolving the dialog with a scripted
+ * value. The harness feeds each key to `component.handleInput(key)` in order and lets
+ * the component's own `done` callback (wired to the factory by the real command code)
+ * resolve the surrounding promise — exercising the genuine toggle/apply/cancel wiring
+ * rather than duplicating it in the test.
+ */
+function driveKeys(...keys: string[]): { [DRIVE_KEYS]: string[] } {
+  return { [DRIVE_KEYS]: keys };
+}
+
 /**
  * Create a minimal ExtensionCommandContext mock with a scriptable `ui.custom`.
  *
@@ -115,6 +129,9 @@ const fakeTheme: any = {
  * `mode`, when provided, is set on the context to model the newer pi `ctx.mode`
  * discriminator ("tui" | "rpc" | "print" | "json"); omitted by default to model
  * legacy pi, where the guard falls back to `hasUI`.
+ *
+ * A `customResponses` entry may also be `driveKeys(...)` to drive the real component's
+ * `handleInput` with actual key sequences instead of resolving with a scripted value.
  */
 function makeCtx(cwd: string, customResponses: unknown[] = [], hasUI = true, mode?: string) {
   const notify = vi.fn();
@@ -126,10 +143,19 @@ function makeCtx(cwd: string, customResponses: unknown[] = [], hasUI = true, mod
     const fakeKb = {};
     return new Promise((resolve) => {
       const built = factory(fakeTui, fakeTheme, fakeKb, (result: unknown) => resolve(result));
-      Promise.resolve(built).then((component: { render(width: number): string[] }) => {
-        rendered.push(component.render(80));
-        resolve(responses.shift());
-      });
+      Promise.resolve(built).then(
+        (component: { render(width: number): string[]; handleInput?(data: string): void }) => {
+          rendered.push(component.render(80));
+          const next = responses.shift();
+          if (next !== null && typeof next === "object" && DRIVE_KEYS in (next as object)) {
+            for (const key of (next as { [DRIVE_KEYS]: string[] })[DRIVE_KEYS]) {
+              component.handleInput?.(key);
+            }
+            return;
+          }
+          resolve(next);
+        },
+      );
     });
   });
   const base: Record<string, unknown> = { cwd, hasUI, ui: { notify, custom } };
@@ -1104,6 +1130,90 @@ describe("handler: remove flow", () => {
     await cmd.handler("tools mason", ctx);
     const config = settingsModule.loadProjectConfig(tmpDir);
     expect(config.agents?.mason?.tools).toEqual(["bash"]);
+  });
+});
+
+// ─── handler: real multiSelectTools key-driven interaction ─────────────────
+
+describe("handler: real multiSelectTools key-driven interaction", () => {
+  let tmpDir: string;
+  let piDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-imps-keys-"));
+    piDir = join(tmpDir, ".pi");
+    mkdirSync(piDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("grant: Space toggles multiple rows and Ctrl+S applies them with a single config write", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool", "b_tool"], ["a_tool", "b_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    // Candidates sorted: ["a_tool", "b_tool"]. Space toggles a_tool selected, down
+    // moves to b_tool, space toggles it selected too, ctrl+s applies both.
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b[B", " ", "\x13"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools?.sort()).toEqual(["a_tool", "b_tool"]);
+  });
+
+  it("grant: Enter also toggles a row (not just Space)", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], ["a_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys("\r", "\x13"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
+  });
+
+  it("grant: Escape cancels after a pending toggle, with no config write", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], ["a_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
+  });
+
+  it("remove: Space toggles multiple rows and Ctrl+S applies them with a single config write", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool", "b_tool"] } } }));
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool", "b_tool"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b[B", " ", "\x13"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
+  });
+
+  it("remove: Escape cancels after a pending toggle, with no config write", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool"] } } }));
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
   });
 });
 

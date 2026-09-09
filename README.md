@@ -93,7 +93,7 @@ Agent frontmatter cannot override additional extensions.
 
 #### `/imps tools [agent-name]`
 
-Inspect and manage the selected agent's tool access — including per-project additive tool grants — through an interactive TUI flow. Requires the interactive TUI; it is unavailable in RPC, print, and JSON modes, where no host UI exists — the command returns immediately without querying or touching config.
+Inspect and manage the selected agent's tool access — including per-project additive tool grants — through an interactive TUI flow. Requires the interactive TUI; it is unavailable in RPC, print, and JSON modes, where no host UI exists — the command returns immediately without querying Armory or changing config.
 
 ```
 /imps tools mason

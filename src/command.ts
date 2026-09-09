@@ -224,11 +224,7 @@ async function showMessage(ctx: ExtensionCommandContext, message: string): Promi
  * or `undefined` on cancellation (Escape) — or immediately in RPC/print/JSON modes, where
  * `ctx.ui.custom` degrades to a no-op, so the command exits without further side effects.
  */
-async function selectOne(
-  ctx: ExtensionCommandContext,
-  title: string,
-  options: string[],
-): Promise<string | undefined> {
+async function selectOne(ctx: ExtensionCommandContext, title: string, options: string[]): Promise<string | undefined> {
   return ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
     const items: SelectItem[] = options.map((value) => ({ value, label: value }));
     const container = new Container();
@@ -479,8 +475,8 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
           const picked = await multiSelectTools(ctx, "Grant project tools", options);
           if (picked === undefined || picked.length === 0) continue;
 
-          let toolsToWrite = new Set(currentProjectTools);
-          for (const name of picked) toolsToWrite = new Set(computeGrantResult(name, toolsToWrite));
+          const toolsToWrite = new Set(currentProjectTools);
+          for (const name of picked) toolsToWrite.add(name);
           try {
             updateProjectAgentTools(ctx.cwd, agentName, [...toolsToWrite]);
           } catch (err: unknown) {
@@ -505,8 +501,8 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
         const picked = await multiSelectTools(ctx, "Remove project grants", options);
         if (picked === undefined || picked.length === 0) continue;
 
-        let toolsToWrite = new Set(currentProjectTools);
-        for (const name of picked) toolsToWrite = new Set(computeRevokeResult(name, toolsToWrite));
+        const toolsToWrite = new Set(currentProjectTools);
+        for (const name of picked) toolsToWrite.delete(name);
         try {
           updateProjectAgentTools(ctx.cwd, agentName, [...toolsToWrite]);
         } catch (err: unknown) {
