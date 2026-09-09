@@ -7,6 +7,7 @@ import type {
   Extension,
   ExtensionFactory,
   ModelRegistry,
+  ModelRuntime,
   ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -30,6 +31,26 @@ const MAX_COMPAT_THINKING_LEVEL: SdkThinkingLevel = "xhigh";
 /** Map host-only levels to the highest level supported by the local SDK boundary. */
 export function resolveImpThinkingLevel(level: ThinkingLevel): SdkThinkingLevel {
   return level === "max" ? MAX_COMPAT_THINKING_LEVEL : (level as SdkThinkingLevel);
+}
+
+/**
+ * Extract the `ModelRuntime` backing a `ModelRegistry` compatibility facade.
+ *
+ * `createAgentSession` (pi >=0.80.8) accepts `modelRuntime`, not the removed
+ * `modelRegistry` option. `ModelRegistry` wraps a `ModelRuntime` in a private
+ * `runtime` field; we read it directly rather than silently constructing a
+ * fresh runtime, which would lose the parent's configured providers/auth.
+ * Throws if the backing runtime is absent, e.g. after an incompatible pi SDK
+ * upgrade changes the field name.
+ */
+export function getBackingModelRuntime(modelRegistry: ModelRegistry): ModelRuntime {
+  const runtime = (modelRegistry as unknown as { runtime?: ModelRuntime }).runtime;
+  if (!runtime) {
+    throw new Error(
+      "pi-imps: ModelRegistry has no backing ModelRuntime — incompatible @earendil-works/pi-coding-agent version",
+    );
+  }
+  return runtime;
 }
 
 const FINAL_TURN_DIRECTIVE =
@@ -152,7 +173,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     tools: toolAllowlist,
     sessionManager: SessionManager.inMemory(),
     settingsManager: createImpSettingsManager(cwd),
-    modelRegistry,
+    modelRuntime: getBackingModelRuntime(modelRegistry),
     resourceLoader: loader,
   });
 

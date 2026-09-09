@@ -36,12 +36,16 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.74.0",
+    "@earendil-works/pi-ai": ">=0.80.8",
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
+    "@earendil-works/pi-tui": ">=0.80.8",
     "typebox": "^1.0.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
-    "@earendil-works/pi-coding-agent": ">=0.74.0",
+    "@earendil-works/pi-ai": "^0.85.1",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@earendil-works/pi-tui": "^0.85.1",
     "typebox": "^1.1.31",
     "typescript": "^5.7.3",
     "vitest": "^3.2.4"
