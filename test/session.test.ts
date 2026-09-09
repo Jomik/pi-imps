@@ -1,7 +1,14 @@
-import { type Extension, SettingsManager, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import {
+  type Extension,
+  ModelRegistry,
+  ModelRuntime,
+  SettingsManager,
+  type ToolResultEvent,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   createImpSettingsManager,
+  getBackingModelRuntime,
   normalizeEmptyToolError,
   resolveImpThinkingLevel,
   resolveToolAllowlist,
@@ -37,6 +44,28 @@ function makeExt(
     shortcuts: new Map(),
   } as Extension;
 }
+
+// ─── getBackingModelRuntime ────────────────────────────────────────────────
+
+describe("getBackingModelRuntime", () => {
+  it("reads the real ModelRegistry's backing ModelRuntime instance", async () => {
+    const runtime = await ModelRuntime.create({
+      authPath: "/tmp/pi-imps-test-auth-nonexistent.json",
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    const registry = new ModelRegistry(runtime);
+
+    // If pi-coding-agent renames ModelRegistry's private backing field, this
+    // assertion (not just a mock) trips, surfacing the SDK compatibility break.
+    expect(getBackingModelRuntime(registry)).toBe(runtime);
+  });
+
+  it("throws a clear compatibility error when the backing runtime is absent", () => {
+    const brokenRegistry = {} as ModelRegistry;
+    expect(() => getBackingModelRuntime(brokenRegistry)).toThrow(/backing ModelRuntime/);
+  });
+});
 
 // ─── resolveImpThinkingLevel ───────────────────────────────────────────────
 

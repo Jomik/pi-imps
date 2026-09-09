@@ -1,4 +1,15 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getSelectListTheme, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import {
+  Container,
+  Key,
+  matchesKey,
+  type SelectItem,
+  SelectList,
+  type SettingItem,
+  SettingsList,
+  Text,
+} from "@earendil-works/pi-tui";
 import { loadProjectConfig, updateProjectAgentTools } from "./settings.js";
 import type { AgentConfig, ImpSettings } from "./types.js";
 
@@ -186,21 +197,137 @@ function formatListLabel(toolName: string, badges: readonly string[]): string {
   return `${toolName} (${badges.join(", ")})`;
 }
 
-const DIALOG_OK = ["OK"];
+/**
+ * Show a one-shot informational/error message as a bordered TUI dialog. Dismissed with
+ * Enter or Escape. In RPC/print/JSON modes `ctx.ui.custom` resolves immediately with
+ * `undefined` (no dialog is actually shown), which is the intended degrade-to-no-op behavior.
+ */
+async function showMessage(ctx: ExtensionCommandContext, message: string): Promise<void> {
+  await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
+    const container = new Container();
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    container.addChild(new Text(message, 1, 0));
+    container.addChild(new Text(theme.fg("dim", "Enter/Esc to close"), 1, 0));
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    return {
+      render: (w: number) => container.render(w),
+      invalidate: () => container.invalidate(),
+      handleInput: (data: string) => {
+        if (matchesKey(data, Key.enter) || matchesKey(data, Key.escape)) done(undefined);
+      },
+    };
+  });
+}
 
-/** Show a one-shot informational/error dialog through the standard select UI, so RPC clients (e.g. Paseo) can display it. */
-async function showDialogMessage(ctx: ExtensionCommandContext, message: string): Promise<void> {
-  await ctx.ui.select(message, DIALOG_OK);
+/**
+ * Show a single-selection TUI dialog built from `SelectList`. Returns the chosen value,
+ * or `undefined` on cancellation (Escape) — or immediately in RPC/print/JSON modes, where
+ * `ctx.ui.custom` degrades to a no-op, so the command exits without further side effects.
+ */
+async function selectOne(ctx: ExtensionCommandContext, title: string, options: string[]): Promise<string | undefined> {
+  return ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
+    const items: SelectItem[] = options.map((value) => ({ value, label: value }));
+    const container = new Container();
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+    const selectList = new SelectList(items, Math.min(items.length, 10), getSelectListTheme());
+    selectList.onSelect = (item) => done(item.value);
+    selectList.onCancel = () => done(undefined);
+    container.addChild(selectList);
+    container.addChild(new Text(theme.fg("dim", "↑↓ navigate · enter select · esc cancel"), 1, 0));
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    return {
+      render: (w: number) => container.render(w),
+      invalidate: () => container.invalidate(),
+      handleInput: (data: string) => {
+        selectList.handleInput(data);
+        tui.requestRender();
+      },
+    };
+  });
+}
+
+interface MultiSelectOption {
+  id: string;
+  label: string;
+}
+
+/**
+ * Show a searchable toggle-list TUI dialog built from `SettingsList` (fuzzy search
+ * enabled), using pi's native SettingsList semantics unmodified: Enter or Space toggles
+ * the highlighted row between `values[0]` (off) and `values[1]` (on), immediately
+ * invoking `onToggle` with the row's id and the direction it moved. Escape closes the
+ * dialog (`onCancel`) — it does not undo any toggles already applied.
+ *
+ * `onToggle` is expected to persist the change synchronously and throw on failure. On a
+ * thrown error, the row is reverted to its prior value and the error is reported via
+ * `ctx.ui.notify` without closing the dialog, so the user can keep working the list.
+ *
+ * There is no staged/selected set and no explicit apply step — every toggle is a
+ * standalone, immediately-persisted action.
+ */
+async function toggleList(
+  ctx: ExtensionCommandContext,
+  title: string,
+  options: readonly MultiSelectOption[],
+  values: readonly [off: string, on: string],
+  onToggle: (id: string, turningOn: boolean) => void,
+): Promise<void> {
+  await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+    const [offValue, onValue] = values;
+    const items: SettingItem[] = options.map((o) => ({
+      id: o.id,
+      label: o.label,
+      currentValue: offValue,
+      values: [offValue, onValue],
+    }));
+
+    const container = new Container();
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+
+    const settingsList = new SettingsList(
+      items,
+      Math.min(items.length + 2, 15),
+      getSettingsListTheme(),
+      (id, newValue) => {
+        const turningOn = newValue === onValue;
+        try {
+          onToggle(id, turningOn);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          settingsList.updateValue(id, turningOn ? offValue : onValue);
+          tui.requestRender();
+          ctx.ui.notify(`Failed to update project config: ${msg}`, "error");
+        }
+      },
+      () => done(undefined),
+      { enableSearch: true },
+    );
+    container.addChild(settingsList);
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+
+    return {
+      render: (w: number) => container.render(w),
+      invalidate: () => container.invalidate(),
+      handleInput: (data: string) => {
+        settingsList.handleInput?.(data);
+        tui.requestRender();
+      },
+    };
+  });
 }
 
 /**
  * Create the `/imps` command registration options.
  *
- * Only the `tools [agent-name]` subcommand is supported. When the agent name
- * is omitted, an agent selector dialog is shown; cancellation exits. Missing
- * subcommands / unknown agent names produce concise usage guidance. The tools
- * flow uses only standard `ctx.ui.select` dialogs, so it works identically in
- * the interactive TUI and in RPC clients such as Paseo.
+ * Only the `tools [agent-name]` subcommand is supported. It is an interactive-TUI-only
+ * flow — RPC, print, and JSON modes return without querying Armory or mutating config.
+ * Non-TUI modes are detected via `ctx.mode` when present (any value other than `"tui"`
+ * exits immediately, before any config read, Armory query, or mutation); when `ctx.mode`
+ * is absent (legacy pi), the guard falls back to `ctx.hasUI` — print/JSON modes are
+ * caught directly, and RPC is caught because `ctx.ui.custom` degrades to a no-op there,
+ * which every dialog in this flow (including the very first one shown) relies on.
  */
 export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], settings: ImpSettings) {
   return {
@@ -227,21 +354,24 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
     },
 
     async handler(args: string, ctx: ExtensionCommandContext): Promise<void> {
-      // No UI (print/JSON modes) — nothing to show. RPC clients (e.g. Paseo) have
-      // ctx.hasUI === true and continue to the standard select flow below.
-      if (!ctx.hasUI) return;
+      // TUI-only guard, checked before any config read, Armory query, or mutation.
+      // Prefer the explicit `mode` discriminator on newer pi ("tui" | "rpc" | "print" | "json")
+      // when present; fall back to the legacy `hasUI` flag when it is not (older pi versions
+      // that lack `ctx.mode`, where RPC's `ctx.ui.custom` no-op degrade already prevents any
+      // further side effects even though `hasUI` alone can't distinguish RPC from TUI there).
+      const mode = (ctx as { mode?: unknown }).mode;
+      if (typeof mode === "string") {
+        if (mode !== "tui") return;
+      } else if (!ctx.hasUI) {
+        return;
+      }
 
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const subcommand = parts[0];
       const explicitAgentName = parts[1];
 
-      if (subcommand !== "tools") {
-        await showDialogMessage(ctx, `Usage: ${USAGE}`);
-        return;
-      }
-
-      if (parts.length > 2) {
-        await showDialogMessage(ctx, `Usage: ${USAGE}`);
+      if (subcommand !== "tools" || parts.length > 2) {
+        await showMessage(ctx, `Usage: ${USAGE}`);
         return;
       }
 
@@ -249,35 +379,34 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
       if (explicitAgentName) {
         const found = agents.find((a) => a.name === explicitAgentName);
         if (!found) {
-          await showDialogMessage(ctx, `Unknown agent: "${explicitAgentName}". Usage: ${USAGE}`);
+          await showMessage(ctx, `Unknown agent: "${explicitAgentName}". Usage: ${USAGE}`);
           return;
         }
         agent = found;
       } else {
         if (agents.length === 0) {
-          await showDialogMessage(ctx, "No agents discovered.");
+          await showMessage(ctx, "No agents discovered.");
           return;
         }
         const sortedNames = [...agents].map((a) => a.name).sort();
-        const selectedName = await ctx.ui.select("Select an agent", sortedNames);
+        const selectedName = await selectOne(ctx, "Select an agent", sortedNames);
         if (selectedName === undefined) return;
         const found = agents.find((a) => a.name === selectedName);
         if (!found) {
-          await showDialogMessage(ctx, `Unknown agent: "${selectedName}". Usage: ${USAGE}`);
+          await showMessage(ctx, `Unknown agent: "${selectedName}". Usage: ${USAGE}`);
           return;
         }
         agent = found;
       }
       const agentName = agent.name;
 
-      // Load project config — report error and abort if malformed. Uses a standard
-      // dialog (not notify) so RPC clients like Paseo can see the failure.
+      // Load project config — report error and abort if malformed.
       let projectConfig: ReturnType<typeof loadProjectConfig>;
       try {
         projectConfig = loadProjectConfig(ctx.cwd);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        await showDialogMessage(ctx, `Cannot read project config: ${msg}`);
+        await showMessage(ctx, `Cannot read project config: ${msg}`);
         return;
       }
 
@@ -301,10 +430,10 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
       let currentProjectTools = new Set<string>(existingProjectToolNames);
 
       for (;;) {
-        const action = await ctx.ui.select(`Project tool grants for agent: ${agentName}`, [
+        const action = await selectOne(ctx, `Project tool grants for agent: ${agentName}`, [
           "List granted tools",
-          "Grant project tool",
-          "Remove project grant",
+          "Grant project tools",
+          "Remove project grants",
           "Done",
         ]);
         if (action === undefined || action === "Done") return;
@@ -318,29 +447,26 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
             registeredToolNames,
           );
           if (effectiveTools.length === 0) {
-            await showDialogMessage(ctx, `No tools would be granted to agent "${agentName}" if summoned now.`);
+            await showMessage(ctx, `No tools would be granted to agent "${agentName}" if summoned now.`);
             continue;
           }
           const lines = effectiveTools.map((name) =>
             formatListLabel(name, computeBadges(name, agentTools, defaultTools, globalTools, currentProjectTools)),
           );
-          await showDialogMessage(ctx, `Tools granted to agent "${agentName}" if summoned now:\n${lines.join("\n")}`);
+          await showMessage(ctx, `Tools granted to agent "${agentName}" if summoned now:\n${lines.join("\n")}`);
           continue;
         }
 
-        if (action === "Grant project tool") {
+        if (action === "Grant project tools") {
           // Synchronous, exactly-once, uncached Armory query — queried fresh on each
           // Grant selection, never cached or emitted for other menu actions.
           const projectToolNames = queryArmoryProjectTools(pi);
           if (projectToolNames === undefined) {
-            await showDialogMessage(
-              ctx,
-              "Armory project tools are unavailable (Armory is not installed or incompatible).",
-            );
+            await showMessage(ctx, "Armory project tools are unavailable (Armory is not installed or incompatible).");
             continue;
           }
           if (projectToolNames.length === 0) {
-            await showDialogMessage(ctx, "Armory is installed, but this project has no configured tools.");
+            await showMessage(ctx, "Armory is installed, but this project has no configured tools.");
             continue;
           }
           const candidates = computeGrantCandidates(
@@ -352,51 +478,43 @@ export function createImpsCommand(pi: ExtensionAPI, agents: AgentConfig[], setti
             currentProjectTools,
           );
           if (candidates.length === 0) {
-            await showDialogMessage(ctx, "No project tools are available to grant.");
+            await showMessage(ctx, "No project tools are available to grant.");
             continue;
           }
-          const picked = await ctx.ui.select("Select a tool to grant", candidates);
-          if (picked === undefined) continue;
-
-          const toolsToWrite = computeGrantResult(picked, currentProjectTools);
-          try {
+          const options = candidates.map((name) => ({ id: name, label: name }));
+          // Each toggle persists immediately (one atomic write per toggle); toggling a row
+          // back to "not granted" during the same open screen undoes just that write. A
+          // failed write leaves currentProjectTools untouched and reverts the row's display.
+          await toggleList(ctx, "Grant project tools", options, ["not granted", "granted"], (name, turningOn) => {
+            const toolsToWrite = turningOn
+              ? computeGrantResult(name, currentProjectTools)
+              : computeRevokeResult(name, currentProjectTools);
             updateProjectAgentTools(ctx.cwd, agentName, toolsToWrite);
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            await showDialogMessage(ctx, `Failed to update project config: ${msg}`);
-            continue;
-          }
-          currentProjectTools = new Set(toolsToWrite);
+            currentProjectTools = new Set(toolsToWrite);
+          });
           continue;
         }
 
-        // action === "Remove project grant"
+        // action === "Remove project grants"
         const removeCandidates = computeRemoveCandidates([...currentProjectTools]);
         if (removeCandidates.length === 0) {
-          await showDialogMessage(ctx, "No project grants to remove.");
+          await showMessage(ctx, "No project grants to remove.");
           continue;
         }
-        const labeled = removeCandidates.map((name) => ({
-          name,
+        const options = removeCandidates.map((name) => ({
+          id: name,
           label: formatRemoveLabel(name, computeBadges(name, agentTools, defaultTools, globalTools, new Set())),
         }));
-        const picked = await ctx.ui.select(
-          "Select a project grant to remove",
-          labeled.map((l) => l.label),
-        );
-        if (picked === undefined) continue;
-        const match = labeled.find((l) => l.label === picked);
-        if (!match) continue;
-
-        const toolsToWrite = computeRevokeResult(match.name, currentProjectTools);
-        try {
+        // Each toggle persists immediately; toggling a row back to "kept" during the same
+        // open screen re-grants it. A failed write leaves currentProjectTools untouched and
+        // reverts the row's display.
+        await toggleList(ctx, "Remove project grants", options, ["kept", "removed"], (name, turningOn) => {
+          const toolsToWrite = turningOn
+            ? computeRevokeResult(name, currentProjectTools)
+            : computeGrantResult(name, currentProjectTools);
           updateProjectAgentTools(ctx.cwd, agentName, toolsToWrite);
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          await showDialogMessage(ctx, `Failed to update project config: ${msg}`);
-          continue;
-        }
-        currentProjectTools = new Set(toolsToWrite);
+          currentProjectTools = new Set(toolsToWrite);
+        });
       }
     },
   };

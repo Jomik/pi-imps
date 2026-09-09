@@ -10,6 +10,8 @@ export function createMockContext(overrides?: Partial<ExtensionContext>): Extens
     model: mockModel,
     modelRegistry: {
       getAvailable: () => [mockModel],
+      // Backing ModelRuntime read by src/session.ts's getBackingModelRuntime bridge.
+      runtime: {},
     } as unknown as ModelRegistry,
     ui: { notify: vi.fn() },
     ...overrides,

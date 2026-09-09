@@ -18,6 +18,29 @@ import {
 import * as settingsModule from "../src/settings.js";
 import type { AgentConfig, ImpSettings } from "../src/types.js";
 
+// The real theme helpers require `initTheme()` to have run (they read a global theme
+// registry). Command-level tests only need identity color functions, not real styling.
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return {
+    ...actual,
+    getSelectListTheme: () => ({
+      selectedPrefix: (t: string) => t,
+      selectedText: (t: string) => t,
+      description: (t: string) => t,
+      scrollInfo: (t: string) => t,
+      noMatch: (t: string) => t,
+    }),
+    getSettingsListTheme: () => ({
+      label: (t: string) => t,
+      value: (t: string) => t,
+      description: (t: string) => t,
+      cursor: "> ",
+      hint: (t: string) => t,
+    }),
+  };
+});
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function makeAgents(...names: string[]): AgentConfig[] {
@@ -70,17 +93,92 @@ function makePi(toolNames: string[], armoryProjectTools?: string[]) {
 }
 
 /**
- * Create a minimal ExtensionCommandContext mock with scriptable ui.select.
- *
- * `hasUI` defaults to `true` (interactive TUI and RPC clients such as Paseo both have
- * `ctx.hasUI === true`). Pass `false` to model print/JSON modes with no UI.
+ * Fake theme passed to `ctx.ui.custom` factories — identity color functions, since these
+ * tests exercise command wiring, not real terminal styling.
  */
-function makeCtx(cwd: string, selectResponses: (string | undefined)[] = [], hasUI = true) {
+// biome-ignore lint/suspicious/noExplicitAny: test harness stand-in for the real Theme type
+const fakeTheme: any = {
+  fg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+};
+
+const DRIVE_KEYS = Symbol("driveKeys");
+
+/**
+ * Marks a `customResponses` entry to drive the real returned component's `handleInput`
+ * with actual terminal key sequences, instead of resolving the dialog with a scripted
+ * value. The harness feeds each key to `component.handleInput(key)` in order and lets
+ * the component's own `done` callback (wired to the factory by the real command code)
+ * resolve the surrounding promise — exercising the genuine toggle/close wiring rather
+ * than duplicating it in the test.
+ */
+function driveKeys(...keys: string[]): { [DRIVE_KEYS]: string[] } {
+  return { [DRIVE_KEYS]: keys };
+}
+
+/**
+ * Create a minimal ExtensionCommandContext mock with a scriptable `ui.custom`.
+ *
+ * Every dialog shown by the command (agent selector, main menu, message dialogs,
+ * grant/remove multi-selects) goes through `ctx.ui.custom`. Each call consumes the
+ * next entry from `customResponses` as the resolved value (simulating the eventual
+ * user interaction), and the built component's `render(80)` output is captured in
+ * `rendered` for content assertions (titles, candidate lists, badges, messages).
+ *
+ * `hasUI` defaults to `true`. Pass `false` to model print/JSON modes with no UI.
+ * `mode`, when provided, is set on the context to model the newer pi `ctx.mode`
+ * discriminator ("tui" | "rpc" | "print" | "json"); omitted by default to model
+ * legacy pi, where the guard falls back to `hasUI`.
+ *
+ * A `customResponses` entry may also be `driveKeys(...)` to drive the real component's
+ * `handleInput` with actual key sequences instead of resolving with a scripted value.
+ */
+function makeCtx(cwd: string, customResponses: unknown[] = [], hasUI = true, mode?: string) {
   const notify = vi.fn();
-  const responses = [...selectResponses];
-  const select = vi.fn(async (_title: string, _options: string[]) => responses.shift());
-  const ctx = { cwd, hasUI, ui: { notify, select } } as unknown as ExtensionCommandContext;
-  return { ctx, notify, select };
+  const responses = [...customResponses];
+  const rendered: string[][] = [];
+  // biome-ignore lint/suspicious/noExplicitAny: test harness accepts any factory shape
+  const custom = vi.fn(async (factory: any) => {
+    const fakeTui = { requestRender: () => {} };
+    const fakeKb = {};
+    return new Promise((resolve) => {
+      const built = factory(fakeTui, fakeTheme, fakeKb, (result: unknown) => resolve(result));
+      Promise.resolve(built).then(
+        (component: { render(width: number): string[]; handleInput?(data: string): void }) => {
+          rendered.push(component.render(80));
+          const next = responses.shift();
+          if (next !== null && typeof next === "object" && DRIVE_KEYS in (next as object)) {
+            for (const key of (next as { [DRIVE_KEYS]: string[] })[DRIVE_KEYS]) {
+              component.handleInput?.(key);
+            }
+            return;
+          }
+          resolve(next);
+        },
+      );
+    });
+  });
+  const base: Record<string, unknown> = { cwd, hasUI, ui: { notify, custom } };
+  if (mode !== undefined) base.mode = mode;
+  const ctx = base as unknown as ExtensionCommandContext;
+  return { ctx, notify, custom, rendered };
+}
+
+/**
+ * Create a context modeling RPC mode: `ctx.hasUI` is `true`, but `ctx.ui.custom`
+ * degrades to a no-op returning `undefined` without invoking the factory at all
+ * (per pi's documented RPC behavior). Used to verify the command bails out before
+ * any Armory query or config mutation in RPC mode.
+ */
+function makeRpcCtx(cwd: string) {
+  const notify = vi.fn();
+  const custom = vi.fn(async () => undefined);
+  const ctx = { cwd, hasUI: true, ui: { notify, custom } } as unknown as ExtensionCommandContext;
+  return { ctx, notify, custom };
+}
+
+function text(lines: string[]): string {
+  return lines.join("\n");
 }
 
 // ─── computeBadges ────────────────────────────────────────────────────────────
@@ -454,59 +552,86 @@ describe("handler argument validation", () => {
 
   it("shows usage dialog for empty args (no subcommand)", async () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir);
+    const { ctx, custom, rendered } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(select).toHaveBeenCalledWith(expect.stringContaining("Usage"), ["OK"]);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("Usage");
   });
 
   it("shows usage dialog for an unknown subcommand", async () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir);
+    const { ctx, custom, rendered } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("list", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(select).toHaveBeenCalledWith(expect.stringContaining("Usage"), ["OK"]);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("Usage");
   });
 
   it("shows an 'unknown agent' dialog for an unknown agent name", async () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir);
+    const { ctx, custom, rendered } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("tools sentinel", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(select).toHaveBeenCalledWith(expect.stringContaining("Unknown agent"), ["OK"]);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("Unknown agent");
   });
 
   it("shows usage dialog for extra arguments after agent name", async () => {
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir);
+    const { ctx, custom, rendered } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("tools mason extra", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(select).toHaveBeenCalledWith(expect.stringContaining("Usage"), ["OK"]);
-  });
-
-  it("works with an RPC-style context (no TUI mode guard) — reaches the select-based loop", async () => {
-    const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Done"]);
-    await cmd.handler("tools mason", ctx);
-    expect(select).toHaveBeenCalled();
-  });
-
-  it("reaches the select flow when hasUI is true and there is no legacy mode property (RPC-compatible)", async () => {
-    const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Done"], true);
-    await cmd.handler("tools mason", ctx);
-    expect(select).toHaveBeenCalled();
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("Usage");
   });
 
   it("returns immediately without any dialogs, Armory emit, or config side effects when hasUI is false", async () => {
     const pi = makePi(["bash"], []);
     const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
     const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", "bash", "Done"], false);
+    const { ctx, custom } = makeCtx(tmpDir, ["Grant project tools", ["bash"], "Done"], false);
     await cmd.handler("tools mason", ctx);
-    expect(select).not.toHaveBeenCalled();
+    expect(custom).not.toHaveBeenCalled();
     expect(pi.events.emit).not.toHaveBeenCalled();
     expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it("in RPC mode (ctx.ui.custom degrades to undefined), returns without querying Armory or mutating config", async () => {
+    const pi = makePi(["bash"], []);
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings());
+    const { ctx, custom } = makeRpcCtx(tmpDir);
+    await cmd.handler("tools mason", ctx);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(pi.events.emit).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it("exits immediately with no dialog, Armory emit, or config side effects when ctx.mode is a non-tui value, even though hasUI is true", async () => {
+    const pi = makePi(["bash"], []);
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings());
+    const { ctx, custom } = makeCtx(tmpDir, ["Grant project tools", ["bash"], "Done"], true, "rpc");
+    await cmd.handler("tools mason", ctx);
+    expect(custom).not.toHaveBeenCalled();
+    expect(pi.events.emit).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it("exits immediately when ctx.mode is 'print', even though hasUI is true", async () => {
+    const pi = makePi(["bash"], []);
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings());
+    const { ctx, custom } = makeCtx(tmpDir, [], true, "print");
+    await cmd.handler("tools mason", ctx);
+    expect(custom).not.toHaveBeenCalled();
+    expect(pi.events.emit).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it("proceeds normally when ctx.mode is 'tui'", async () => {
+    const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings());
+    const { ctx, custom, rendered } = makeCtx(tmpDir, ["Done"], true, "tui");
+    await cmd.handler("tools mason", ctx);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("Project tool grants for agent: mason");
   });
 });
 
@@ -526,58 +651,60 @@ describe("handler: agent selection (omitted agent name)", () => {
 
   it("shows a sorted agent selector when the agent name is omitted", async () => {
     const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("sentinel", "mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["mason", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["mason", "Done"]);
     await cmd.handler("tools", ctx);
-    expect(select.mock.calls[0]).toEqual(["Select an agent", ["mason", "sentinel"]]);
+    const first = text(rendered[0]);
+    expect(first).toContain("Select an agent");
+    expect(first.indexOf("mason")).toBeLessThan(first.indexOf("sentinel"));
   });
 
   it("proceeds to the selected agent's menu", async () => {
     const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("sentinel", "mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["mason", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["mason", "Done"]);
     await cmd.handler("tools", ctx);
-    expect(select.mock.calls[1]).toEqual(["Project tool grants for agent: mason", expect.any(Array)]);
+    expect(text(rendered[1])).toContain("Project tool grants for agent: mason");
   });
 
   it("exits without further dialogs when the agent selector is cancelled", async () => {
     const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("sentinel", "mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, [undefined]);
+    const { ctx, custom } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("tools", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
+    expect(custom).toHaveBeenCalledTimes(1);
   });
 
   it("shows a standard dialog and exits when no agents are discovered", async () => {
     const cmd = createImpsCommand(makePi(["bash"], []), [], makeSettings());
-    const { ctx, select } = makeCtx(tmpDir);
+    const { ctx, custom, rendered } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("tools", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(select).toHaveBeenCalledWith(expect.any(String), ["OK"]);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("No agents discovered");
   });
 
   it("bypasses the selector and goes directly to the menu when an explicit known agent name is given", async () => {
     const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("sentinel", "mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Done"]);
+    const { ctx, custom, rendered } = makeCtx(tmpDir, ["Done"]);
     await cmd.handler("tools mason", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(select.mock.calls[0]).toEqual(["Project tool grants for agent: mason", expect.any(Array)]);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("Project tool grants for agent: mason");
   });
 
-  it("an unknown explicit agent name remains an RPC-visible error, not the selector", async () => {
+  it("an unknown explicit agent name remains a visible error, not the selector", async () => {
     const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir);
+    const { ctx, custom, rendered } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("tools ghost", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(select).toHaveBeenCalledWith(expect.stringContaining("Unknown agent"), ["OK"]);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("Unknown agent");
   });
 
   it("shows the standard unknown-agent error and stops, without throwing, when the selector returns a name not offered", async () => {
     const pi = makePi(["bash"], []);
     const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
     const cmd = createImpsCommand(pi, makeAgents("sentinel", "mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["ghost"]);
+    const { ctx, custom, rendered } = makeCtx(tmpDir, ["ghost"]);
     await expect(cmd.handler("tools", ctx)).resolves.toBeUndefined();
-    expect(select).toHaveBeenCalledTimes(2);
-    expect(select.mock.calls[0]).toEqual(["Select an agent", ["mason", "sentinel"]]);
-    expect(select).toHaveBeenCalledWith(expect.stringContaining('Unknown agent: "ghost"'), ["OK"]);
+    expect(custom).toHaveBeenCalledTimes(2);
+    expect(text(rendered[0])).toContain("Select an agent");
+    expect(text(rendered[1])).toContain('Unknown agent: "ghost"');
     expect(pi.events.emit).not.toHaveBeenCalled();
     expect(updateSpy).not.toHaveBeenCalled();
   });
@@ -599,33 +726,50 @@ describe("handler: malformed project config", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("shows a select dialog and does not enter the action loop when .pi/imps.json is a directory (EISDIR)", async () => {
+  it("shows a dialog and does not enter the action loop when .pi/imps.json is a directory (EISDIR)", async () => {
     mkdirSync(join(piDir, "imps.json"), { recursive: true });
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir);
+    const { ctx, custom, rendered } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("tools mason", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(select).toHaveBeenCalledWith(expect.stringContaining("Cannot read project config"), ["OK"]);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("Cannot read project config");
   });
 
-  it("shows a select dialog for non-object root config", async () => {
+  it("shows a dialog for non-object root config", async () => {
     writeFileSync(join(piDir, "imps.json"), JSON.stringify([1, 2, 3]));
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir);
+    const { ctx, rendered } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("tools mason", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(select).toHaveBeenCalledWith(expect.stringContaining("Cannot read project config"), ["OK"]);
+    expect(text(rendered[0])).toContain("Cannot read project config");
   });
 
-  it("shows a select dialog for malformed JSON, and never overwrites the file", async () => {
+  it("shows a dialog for malformed JSON, and never overwrites the file", async () => {
     const configPath = join(piDir, "imps.json");
     writeFileSync(configPath, "not-json");
     const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir);
+    const { ctx, rendered } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("tools mason", ctx);
-    expect(select).toHaveBeenCalledWith(expect.stringContaining("Cannot read project config"), ["OK"]);
+    expect(text(rendered[0])).toContain("Cannot read project config");
     // File left untouched.
     expect(readFileSync(configPath, "utf-8")).toBe("not-json");
+  });
+
+  it("shows a dialog and does not enter the action loop when project config has a non-object 'agents' field", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: "bad" }));
+    const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
+    const { ctx, custom, rendered } = makeCtx(tmpDir, [undefined]);
+    await cmd.handler("tools mason", ctx);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("Cannot read project config");
+  });
+
+  it("shows a dialog and does not enter the action loop when the selected agent's config entry is not an object", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: "bad" } }));
+    const cmd = createImpsCommand(makePi([]), makeAgents("mason"), makeSettings());
+    const { ctx, custom, rendered } = makeCtx(tmpDir, [undefined]);
+    await cmd.handler("tools mason", ctx);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(text(rendered[0])).toContain("Cannot read project config");
   });
 });
 
@@ -654,15 +798,15 @@ describe("handler: Armory query messaging (Grant action only)", () => {
   it("does not emit the Armory event for List granted tools", async () => {
     const pi = makePi(["bash"], []);
     const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings());
-    const { ctx } = makeCtx(tmpDir, ["List granted tools", "OK", "Done"]);
+    const { ctx } = makeCtx(tmpDir, ["List granted tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
     expect(pi.events.emit).not.toHaveBeenCalled();
   });
 
-  it("does not emit the Armory event for Remove project grant", async () => {
+  it("does not emit the Armory event for Remove project grants", async () => {
     const pi = makePi(["bash"], []);
     const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings());
-    const { ctx } = makeCtx(tmpDir, ["Remove project grant", "Done"]);
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
     expect(pi.events.emit).not.toHaveBeenCalled();
   });
@@ -670,43 +814,42 @@ describe("handler: Armory query messaging (Grant action only)", () => {
   it("shows an 'unavailable' dialog when Armory never responds to a Grant selection", async () => {
     const pi = makePi(["bash"]);
     const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
-    expect(select.mock.calls[1]).toEqual([expect.stringContaining("unavailable"), ["OK"]]);
+    expect(text(rendered[1])).toContain("unavailable");
     expect(pi.events.emit).toHaveBeenCalledTimes(1);
   });
 
   it("shows a distinct 'no configured tools' dialog when Armory responds with [] to a Grant selection", async () => {
     const pi = makePi(["bash"], []);
     const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
-    expect(select.mock.calls[1]).toEqual([expect.stringContaining("no configured tools"), ["OK"]]);
+    expect(text(rendered[1])).toContain("no configured tools");
   });
 
   it("the 'unavailable' and 'empty' messages are distinct", async () => {
     const cmdAbsent = createImpsCommand(makePi(["bash"]), makeAgents("mason"), makeSettings());
-    const { ctx: ctxAbsent, select: selectAbsent } = makeCtx(tmpDir, ["Grant project tool", "Done"]);
+    const { ctx: ctxAbsent, rendered: renderedAbsent } = makeCtx(tmpDir, ["Grant project tools", undefined, "Done"]);
     await cmdAbsent.handler("tools mason", ctxAbsent);
 
     const cmdEmpty = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings());
-    const { ctx: ctxEmpty, select: selectEmpty } = makeCtx(tmpDir, ["Grant project tool", "Done"]);
+    const { ctx: ctxEmpty, rendered: renderedEmpty } = makeCtx(tmpDir, ["Grant project tools", undefined, "Done"]);
     await cmdEmpty.handler("tools mason", ctxEmpty);
 
-    const absentMsg = selectAbsent.mock.calls[1][0];
-    const emptyMsg = selectEmpty.mock.calls[1][0];
-    expect(absentMsg).not.toEqual(emptyMsg);
+    expect(text(renderedAbsent[1])).not.toEqual(text(renderedEmpty[1]));
   });
 
   it("does not show a query-state dialog when Armory responds with tool names", async () => {
     const cmd = createImpsCommand(makePi(["bash", "run_tests"], ["run_tests"]), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", "OK", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
-    // Second call is not an Armory-availability dialog (run_tests is already covered by the
-    // default allowlist here, so it falls through to the "no candidates" dialog instead).
-    const secondMessage = select.mock.calls[1][0] as string;
+    // Second dialog is not an Armory-availability message (run_tests is already covered by
+    // the default allowlist here, so it falls through to the "no candidates" dialog instead).
+    const secondMessage = text(rendered[1]);
     expect(secondMessage).not.toContain("unavailable");
     expect(secondMessage).not.toContain("no configured tools");
+    expect(secondMessage).toContain("No project tools are available to grant");
   });
 
   it("queries fresh on each Grant selection, reflecting the latest response", async () => {
@@ -723,12 +866,21 @@ describe("handler: Armory query messaging (Grant action only)", () => {
       events: { emit },
     } as unknown as ExtensionAPI;
     const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings({}, []));
-    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", "OK", "Grant project tool", "run_tests", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, [
+      "Grant project tools",
+      undefined,
+      "Grant project tools",
+      driveKeys(" ", "\x1b"),
+      "Done",
+    ]);
 
     await cmd.handler("tools mason", ctx);
     expect(emit).toHaveBeenCalledTimes(2);
-    expect(select.mock.calls[1]).toEqual([expect.stringContaining("unavailable"), ["OK"]]);
-    expect(select.mock.calls[3]).toEqual(["Select a tool to grant", ["run_tests"]]);
+    expect(text(rendered[1])).toContain("unavailable");
+    expect(text(rendered[3])).toContain("run_tests");
+
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["run_tests"]);
   });
 });
 
@@ -754,14 +906,13 @@ describe("handler: List granted tools", () => {
     const settings = makeSettings({ mason: ["grep"] });
     const pi = makePi(["bash", "grep", "run_tests"]);
     const cmd = createImpsCommand(pi, agents, settings);
-    const { ctx, select } = makeCtx(tmpDir, ["List granted tools", "OK", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["List granted tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
 
-    const listCall = select.mock.calls[1];
-    expect(listCall[0]).toContain("bash (agent)");
-    expect(listCall[0]).toContain("grep (global)");
-    expect(listCall[0]).toContain("run_tests (project)");
-    expect(listCall[1]).toEqual(["OK"]);
+    const listMessage = text(rendered[1]);
+    expect(listMessage).toContain("bash (agent)");
+    expect(listMessage).toContain("grep (global)");
+    expect(listMessage).toContain("run_tests (project)");
   });
 
   it("excludes configured names that are not currently registered", async () => {
@@ -769,30 +920,28 @@ describe("handler: List granted tools", () => {
     const agents = makeAgents("mason");
     const pi = makePi(["bash"]);
     const cmd = createImpsCommand(pi, agents, makeSettings({}, ["bash"]));
-    const { ctx, select } = makeCtx(tmpDir, ["List granted tools", "OK", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["List granted tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
 
-    const listCall = select.mock.calls[1];
-    expect(listCall[0]).not.toContain("ghost_tool");
-    expect(listCall[0]).toContain("bash");
+    const listMessage = text(rendered[1]);
+    expect(listMessage).not.toContain("ghost_tool");
+    expect(listMessage).toContain("bash");
   });
 
   it("shows a concise empty state when no tools would be granted", async () => {
     const agents: AgentConfig[] = [makeAgentWithTools("mason", [])];
     const pi = makePi(["bash"]);
     const cmd = createImpsCommand(pi, agents, makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["List granted tools", "OK", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["List granted tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
 
-    const listCall = select.mock.calls[1];
-    expect(listCall[0]).toContain("No tools would be granted");
-    expect(listCall[1]).toEqual(["OK"]);
+    expect(text(rendered[1])).toContain("No tools would be granted");
   });
 
   it("does not emit the Armory event", async () => {
     const pi = makePi(["bash"]);
     const cmd = createImpsCommand(pi, makeAgents("mason"), makeSettings());
-    const { ctx } = makeCtx(tmpDir, ["List granted tools", "OK", "Done"]);
+    const { ctx } = makeCtx(tmpDir, ["List granted tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
     expect(pi.events.emit).not.toHaveBeenCalled();
   });
@@ -814,7 +963,7 @@ describe("handler: grant flow", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("presents only tools not already available from any source, deduplicated", async () => {
+  it("presents only tools not already available from any source, deduplicated, as a searchable multi-select", async () => {
     writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["already_project"] } } }));
     const agents: AgentConfig[] = [makeAgentWithTools("mason", ["already_agent"])];
     const settings = makeSettings({ mason: ["already_global"] });
@@ -823,42 +972,49 @@ describe("handler: grant flow", () => {
       ["already_agent", "already_global", "already_project", "run_tests", "run_tests"],
     );
     const cmd = createImpsCommand(pi, agents, settings);
-    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", undefined, "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
 
-    const grantCall = select.mock.calls.find((c) => c[0] === "Select a tool to grant");
-    expect(grantCall).toBeDefined();
-    expect(grantCall?.[1]).toEqual(["run_tests"]);
+    const grantScreen = text(rendered[1]);
+    expect(grantScreen).toContain("run_tests");
+    expect(grantScreen).not.toContain("already_agent");
+    expect(grantScreen).not.toContain("already_global");
+    expect(grantScreen).not.toContain("already_project");
+    expect(grantScreen).not.toContain("unregistered_missing");
   });
 
-  it("persists a granted tool immediately and returns to the action loop", async () => {
+  it("each toggle persists immediately as its own atomic write, and the loop returns to the main menu after Escape", async () => {
     const agents = makeAgents("mason");
-    const pi = makePi(["run_tests"], ["run_tests"]);
-    const cmd = createImpsCommand(pi, agents, makeSettings({}, [])); // empty allowlist: run_tests not already available by default
-    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", "run_tests", "Done"]);
+    const pi = makePi(["run_tests", "run_checks"], ["run_tests", "run_checks"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, [])); // empty allowlist: nothing already available by default
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    // Candidates sorted: ["run_checks", "run_tests"]. Toggle run_checks granted, then Escape
+    // closes the screen — there is no separate apply step.
+    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
 
+    expect(updateSpy).toHaveBeenCalledTimes(1);
     const config = settingsModule.loadProjectConfig(tmpDir);
-    expect(config.agents?.mason?.tools).toEqual(["run_tests"]);
-    // Loop continued: main menu was shown again (twice total — before and after the grant).
-    const mainMenuCalls = select.mock.calls.filter((c) => c[0] === "Project tool grants for agent: mason");
-    expect(mainMenuCalls.length).toBe(2);
+    expect(config.agents?.mason?.tools).toEqual(["run_checks"]);
+    // Loop continued: main menu was shown again after Escape closed the grant screen.
+    const mainMenuScreens = rendered.filter((lines) => text(lines).includes("Project tool grants for agent: mason"));
+    expect(mainMenuScreens.length).toBe(2);
   });
 
   it("shows a dialog and does not grant when there are no candidates", async () => {
     const agents = makeAgents("mason");
     const pi = makePi(["bash"], ["bash"]);
     const cmd = createImpsCommand(pi, agents, makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
-    expect(select.mock.calls.some((c) => c[0] === "No project tools are available to grant.")).toBe(true);
+    expect(rendered.some((lines) => text(lines).includes("No project tools are available to grant."))).toBe(true);
   });
 
-  it("cancelling the tool pick (undefined) returns to the main menu without persisting", async () => {
+  it("cancelling the multi-select (undefined) returns to the main menu without persisting", async () => {
     const agents = makeAgents("mason");
     const pi = makePi(["run_tests"], ["run_tests"]);
     const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
-    const { ctx } = makeCtx(tmpDir, ["Grant project tool", undefined, "Done"]);
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
     const config = settingsModule.loadProjectConfig(tmpDir);
     expect(config.agents?.mason?.tools ?? []).toEqual([]);
@@ -886,11 +1042,10 @@ describe("handler: remove flow", () => {
     const agents = makeAgents("mason");
     const pi = makePi(["bash"], []); // stale_unregistered no longer registered/in query
     const cmd = createImpsCommand(pi, agents, makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Remove project grant", undefined, "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["Remove project grants", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
 
-    const removeCall = select.mock.calls.find((c) => c[0] === "Select a project grant to remove");
-    expect(removeCall?.[1]).toEqual(["stale_unregistered"]);
+    expect(text(rendered[1])).toContain("stale_unregistered");
   });
 
   it("shows remaining sources for a multi-source tool and removes only the project source", async () => {
@@ -899,13 +1054,29 @@ describe("handler: remove flow", () => {
     const settings = makeSettings({ mason: ["bash"] }, []); // bash also globally granted; empty allowlist avoids a default badge
     const pi = makePi(["bash"], []);
     const cmd = createImpsCommand(pi, agents, settings);
-    const { ctx, select } = makeCtx(tmpDir, ["Remove project grant", "bash (still available via: global)", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
 
+    expect(text(rendered[1])).toContain("bash (still available via: global)");
     const config = settingsModule.loadProjectConfig(tmpDir);
     expect(config.agents?.mason?.tools ?? []).toEqual([]);
-    const removeCall = select.mock.calls.find((c) => c[0] === "Select a project grant to remove");
-    expect(removeCall?.[1]).toEqual(["bash (still available via: global)"]);
+  });
+
+  it("each removal toggle persists immediately; toggling two rows writes twice", async () => {
+    writeFileSync(
+      join(piDir, "imps.json"),
+      JSON.stringify({ agents: { mason: { tools: ["run_tests", "run_checks"] } } }),
+    );
+    const agents = makeAgents("mason");
+    const pi = makePi(["run_tests", "run_checks"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b[B", " ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
   });
 
   it("removing a project grant preserves other agents' config and unrelated top-level keys", async () => {
@@ -922,7 +1093,7 @@ describe("handler: remove flow", () => {
     const agents = makeAgents("mason", "sentinel");
     const pi = makePi(["run_tests"], []);
     const cmd = createImpsCommand(pi, agents, makeSettings({}, [])); // empty allowlist avoids a default badge on run_tests
-    const { ctx } = makeCtx(tmpDir, ["Remove project grant", "run_tests", "Done"]);
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
 
     const config = settingsModule.loadProjectConfig(tmpDir);
@@ -937,9 +1108,158 @@ describe("handler: remove flow", () => {
     const agents = makeAgents("mason");
     const pi = makePi(["bash"], []);
     const cmd = createImpsCommand(pi, agents, makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Remove project grant", "Done"]);
+    const { ctx, rendered } = makeCtx(tmpDir, ["Remove project grants", undefined, "Done"]);
     await cmd.handler("tools mason", ctx);
-    expect(select.mock.calls.some((c) => c[0] === "No project grants to remove.")).toBe(true);
+    expect(rendered.some((lines) => text(lines).includes("No project grants to remove."))).toBe(true);
+  });
+
+  it("cancelling the multi-select (undefined) removes nothing", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["bash"] } } }));
+    const agents = makeAgents("mason");
+    const pi = makePi(["bash"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings());
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", undefined, "Done"]);
+    await cmd.handler("tools mason", ctx);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["bash"]);
+  });
+});
+
+// ─── handler: grant/remove toggle interaction (Enter/Space toggle, immediate persistence) ──
+
+describe("handler: grant/remove toggle interaction (Enter/Space toggle, immediate persistence)", () => {
+  let tmpDir: string;
+  let piDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-imps-keys-"));
+    piDir = join(tmpDir, ".pi");
+    mkdirSync(piDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("grant: Space toggles the highlighted row on and persists it immediately", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], ["a_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
+  });
+
+  it("grant: Enter toggles the highlighted row on and persists it immediately (native SettingsList semantics)", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], ["a_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys("\r", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
+  });
+
+  it("grant: toggling two rows writes once per toggle", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool", "b_tool"], ["a_tool", "b_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    // Candidates sorted: ["a_tool", "b_tool"]. Toggle a_tool on, move down, toggle b_tool on.
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b[B", " ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools?.sort()).toEqual(["a_tool", "b_tool"]);
+  });
+
+  it("grant: toggling a row on then back off during the same screen persists both writes, ending ungranted", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], ["a_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", " ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
+  });
+
+  it("grant: Escape closes the screen without undoing an already-applied toggle", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], ["a_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const { ctx, rendered } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
+    // Loop continued to the main menu after Escape closed the grant screen.
+    const mainMenuScreens = rendered.filter((lines) => text(lines).includes("Project tool grants for agent: mason"));
+    expect(mainMenuScreens.length).toBe(2);
+  });
+
+  it("remove: Space toggles the highlighted row to removed and persists it immediately", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool"] } } }));
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
+  });
+
+  it("remove: toggling two rows writes once per toggle", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool", "b_tool"] } } }));
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool", "b_tool"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b[B", " ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
+  });
+
+  it("remove: toggling a row to removed then back to kept during the same screen restores the grant", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool"] } } }));
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", " ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
+  });
+
+  it("remove: Escape closes the screen without undoing an already-applied removal", async () => {
+    writeFileSync(join(piDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["a_tool"] } } }));
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const { ctx } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", "\x1b"), "Done"]);
+    await cmd.handler("tools mason", ctx);
+
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
   });
 });
 
@@ -959,16 +1279,16 @@ describe("handler: cancellation and Done", () => {
 
   it("exits the loop when 'Done' is selected", async () => {
     const cmd = createImpsCommand(makePi(["bash"], ["bash"]), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, ["Done"]);
+    const { ctx, custom } = makeCtx(tmpDir, ["Done"]);
     await cmd.handler("tools mason", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
+    expect(custom).toHaveBeenCalledTimes(1);
   });
 
   it("exits the loop when the main menu selection is cancelled (undefined)", async () => {
     const cmd = createImpsCommand(makePi(["bash"], ["bash"]), makeAgents("mason"), makeSettings());
-    const { ctx, select } = makeCtx(tmpDir, [undefined]);
+    const { ctx, custom } = makeCtx(tmpDir, [undefined]);
     await cmd.handler("tools mason", ctx);
-    expect(select).toHaveBeenCalledTimes(1);
+    expect(custom).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -987,36 +1307,66 @@ describe("handler: write failures", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows a select dialog on grant persistence failure and keeps the loop open", async () => {
-    vi.spyOn(settingsModule, "updateProjectAgentTools").mockImplementation(() => {
+  it("grant: a failed write leaves currentProjectTools unchanged, reverts the row, and notifies without closing the dialog", async () => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["a_tool"], ["a_tool"]);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const realUpdate = settingsModule.updateProjectAgentTools;
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    updateSpy.mockImplementationOnce(() => {
       throw new Error("disk full");
     });
-    const cmd = createImpsCommand(makePi(["run_tests"], ["run_tests"]), makeAgents("mason"), makeSettings({}, []));
-    const { ctx, select } = makeCtx(tmpDir, ["Grant project tool", "run_tests", "Done"]);
+    updateSpy.mockImplementation(realUpdate);
+    const { ctx, notify } = makeCtx(tmpDir, ["Grant project tools", driveKeys(" ", " ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
-    expect(select.mock.calls.some((c) => c[0] === "Failed to update project config: disk full")).toBe(true);
+
+    // First space fails and reverts the row to "not granted" (the write did not change
+    // currentProjectTools). Notify reports the failure without crashing or closing the
+    // dialog. Because the row was correctly reverted, the second space press retries the
+    // same "grant" direction (not "revoke") and succeeds.
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Failed to update project config: disk full"), "error");
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools).toEqual(["a_tool"]);
   });
 
-  it("shows a select dialog on revoke persistence failure and keeps the loop open", async () => {
+  it("remove: a failed write leaves currentProjectTools unchanged, reverts the row, and notifies without closing the dialog", async () => {
     writeFileSync(join(tmpDir, ".pi", "imps.json"), JSON.stringify({ agents: { mason: { tools: ["bash"] } } }));
-    vi.spyOn(settingsModule, "updateProjectAgentTools").mockImplementation(() => {
+    const agents = makeAgents("mason");
+    const pi = makePi(["bash"], []);
+    const cmd = createImpsCommand(pi, agents, makeSettings({}, []));
+    const realUpdate = settingsModule.updateProjectAgentTools;
+    const updateSpy = vi.spyOn(settingsModule, "updateProjectAgentTools");
+    updateSpy.mockImplementationOnce(() => {
       throw new Error("disk full");
     });
-    const cmd = createImpsCommand(makePi(["bash"], []), makeAgents("mason"), makeSettings({}, []));
-    const { ctx, select } = makeCtx(tmpDir, ["Remove project grant", "bash", "Done"]);
+    updateSpy.mockImplementation(realUpdate);
+    const { ctx, notify } = makeCtx(tmpDir, ["Remove project grants", driveKeys(" ", " ", "\x1b"), "Done"]);
     await cmd.handler("tools mason", ctx);
-    expect(select.mock.calls.some((c) => c[0] === "Failed to update project config: disk full")).toBe(true);
+
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Failed to update project config: disk full"), "error");
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    const config = settingsModule.loadProjectConfig(tmpDir);
+    expect(config.agents?.mason?.tools ?? []).toEqual([]);
   });
 });
 
-// ─── no custom TUI code remains ──────────────────────────────────────────────
+// ─── TUI-only, custom-picker implementation ─────────────────────────────────
 
-describe("no custom TUI picker code remains", () => {
-  it("command.ts does not reference ctx.ui.custom or the removed picker class", () => {
+describe("interactive-TUI-only implementation", () => {
+  it("gates non-TUI modes on ctx.mode when present, falling back to ctx.hasUI", () => {
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(__dirname, "../src/command.ts"), "utf-8");
-    expect(source).not.toContain("ui.custom");
-    expect(source).not.toContain("TwoPaneToolPicker");
-    expect(source).not.toContain("pi-tui");
+    expect(source).toContain('mode !== "tui"');
+    expect(source).toContain("ctx.hasUI");
+  });
+
+  it("builds Grant/Remove pickers as searchable multi-selects from pi-tui primitives", () => {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(__dirname, "../src/command.ts"), "utf-8");
+    expect(source).toContain("@earendil-works/pi-tui");
+    expect(source).toContain("SettingsList");
+    expect(source).toContain("enableSearch: true");
+    expect(source).toContain("ctx.ui.custom");
   });
 });
