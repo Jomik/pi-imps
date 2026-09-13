@@ -145,7 +145,9 @@ Grant candidates are project Armory tools that are currently registered in the p
 
 Each toggle persists all selected additions or removals as they happen and affects subsequently summoned imps immediately. Removing a project grant removes only that source; access inherited from another source remains unchanged. Existing settings for other agents and unrecognized tool names are preserved. Missing Armory support, an empty project Armory config, and a malformed or unreadable project config are reported in the TUI; invalid config is never overwritten. A write failure during a toggle reverts the toggled row to its prior value, reports the error, and leaves the screen open — it does not change the in-memory grant state, overwrite the existing config, or crash the command.
 
-The first version does not support non-TUI clients, edit global settings or agent frontmatter, add persistent UI, or integrate directly with external agent hosts such as Orca or Herdr.
+The first version does not support non-TUI clients, edit global settings or agent frontmatter, add persistent UI, or launch and manage external agent hosts such as Orca or Herdr.
+
+When Pi is itself launched as an Orca-dispatched worker, pi-imps recognizes Orca's injected dispatch preamble and exposes an `agent_done` tool that reports the worker outcome through Orca without requiring shell access. The worker does not receive recursive imp tools or the available-agents prompt block. The bridge does not launch workers, create or merge worktrees, rename terminals, proxy other Orca orchestration operations, or provide a generic host adapter.
 
 
 ### Child-Session Error Normalization
