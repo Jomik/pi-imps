@@ -11,7 +11,7 @@ We need a small, composable primitive: summon an agent, get its result, done.
 1. **Minimal core** — summon, wait, dismiss. Everything else is optional or external.
 2. **Low config** — sensible defaults, minimal setup. Configuration lives in `~/.pi/agent/imps.json` (optional). Agent frontmatter is the per-agent configuration surface.
 3. **Composable** — other extensions can build on top. Don't bake in observability chrome, custom renderers, or delegation strategies.
-4. **No recursion** — imps are leaf workers. Only the parent session spawns imps. Enforced by not loading pi-imps on child sessions — imp tools are never registered, nothing to filter out.
+4. **No recursion** — imps are leaf workers. Only the parent session spawns imps. For ordinary in-process summoned imp sessions, this is enforced by not loading pi-imps on the child session — imp tools are never registered, nothing to filter out. Verified Orca-dispatched workers instead load the bridge (see below) but deactivate recursive imp tools before the agent run, preserving the same leaf-worker invariant.
 5. **Quiet** — no injected messages, no delegation reminders, no rotating hints. The LLM decides when to delegate based on its system prompt.
 
 ## Core API Surface
