@@ -30,30 +30,35 @@ export interface OrcaWorkerDispatch {
  * Strictly parse Orca's dispatched-worker preamble.
  *
  * Requires the prompt to begin with the exact worker preamble sentence and
- * contain a `Your task ID is: <taskId>` sentence, plus an embedded
- * `orca orchestration send ... --type worker_done ...` command line. The
- * worker handle, capability, dispatch id, and task id are extracted from
- * that command line's `--from`, `--dispatch-capability`, `--dispatch-id`,
- * and `--task-id` flags respectively — whitespace-delimited values only; the
- * command's quoted `--subject`/`--body` text is never parsed. The command's
- * `--task-id` value must equal the declared task id. Returns undefined on
- * any mismatch or omission.
+ * contain a line-anchored `Your task ID is: <taskId>` sentence, plus an
+ * embedded `orca orchestration send ... --type worker_done ...` command
+ * line (optionally indented with leading horizontal whitespace, as Orca's
+ * real preamble does). The worker handle, capability, dispatch id, and task
+ * id are extracted from that command line's `--from`, `--dispatch-capability`,
+ * `--dispatch-id`, and `--task-id` flags respectively — whitespace-delimited
+ * values only; the command's quoted `--subject`/`--body` text is never
+ * parsed on its own, but because Orca's flag order is fixed (subject/body
+ * before task-id/dispatch-id), the *last* occurrence of `--task-id` and
+ * `--dispatch-id` in the command line is used so flag-like text quoted
+ * inside `--subject`/`--body` cannot be mistaken for the real trailing
+ * flags. The command's `--task-id` value must equal the declared task id.
+ * Returns undefined on any mismatch or omission.
  */
 export function parseOrcaWorkerDispatch(prompt: string): OrcaWorkerDispatch | undefined {
   if (!prompt.startsWith(ORCA_DISPATCHED_WORKER_PREAMBLE)) return undefined;
 
-  const taskIdMatch = prompt.match(/Your task ID is:\s*(\S+)/);
+  const taskIdMatch = prompt.match(/^Your task ID is:\s*(\S+)\s*$/m);
   if (!taskIdMatch) return undefined;
   const taskId = taskIdMatch[1];
 
-  const commandLineMatch = prompt.match(/^orca orchestration send .*--type worker_done.*$/m);
+  const commandLineMatch = prompt.match(/^[ \t]*orca orchestration send .*--type worker_done.*$/m);
   if (!commandLineMatch) return undefined;
   const commandLine = commandLineMatch[0];
 
   const fromMatch = commandLine.match(/--from\s+(\S+)/);
   const capabilityMatch = commandLine.match(/--dispatch-capability\s+(\S+)/);
-  const taskIdFlagMatch = commandLine.match(/--task-id\s+(\S+)/);
-  const dispatchIdMatch = commandLine.match(/--dispatch-id\s+(\S+)/);
+  const taskIdFlagMatch = lastMatch(commandLine, /--task-id\s+(\S+)/g);
+  const dispatchIdMatch = lastMatch(commandLine, /--dispatch-id\s+(\S+)/g);
   if (!fromMatch || !capabilityMatch || !taskIdFlagMatch || !dispatchIdMatch) return undefined;
 
   const workerHandle = fromMatch[1];
@@ -62,6 +67,12 @@ export function parseOrcaWorkerDispatch(prompt: string): OrcaWorkerDispatch | un
   if (taskIdFlagMatch[1] !== taskId) return undefined;
 
   return { workerHandle, taskId, dispatchId, capability };
+}
+
+/** Return the last match of a global regex, or undefined if there are none. */
+function lastMatch(text: string, globalRe: RegExp): RegExpMatchArray | undefined {
+  const matches = [...text.matchAll(globalRe)];
+  return matches.length > 0 ? matches[matches.length - 1] : undefined;
 }
 
 /**

@@ -101,6 +101,25 @@ orca orchestration send --dispatch-capability cap1 --type worker_done --subject 
   it("rejects an ordinary user prompt unrelated to Orca", () => {
     expect(parseOrcaWorkerDispatch("Please fix the failing test in src/foo.ts")).toBeUndefined();
   });
+
+  it("parses a verbatim-style Orca preamble with a two-space-indented command and fake flags embedded in quoted --subject/--body text", () => {
+    const prompt = `${ORCA_DISPATCHED_WORKER_PREAMBLE}
+
+Your task ID is: task_fba7406bf543
+
+When finished, report completion by running:
+
+  orca orchestration send --from worker-7 --dispatch-capability cap-secret-xyz --type worker_done --subject "--task-id task_bogus --dispatch-id dispatch-bogus" --body "Fake flags here: --task-id task_bogus --dispatch-id dispatch-bogus" --task-id task_fba7406bf543 --dispatch-id dispatch-456 --outcome succeeded
+`;
+
+    const dispatch = parseOrcaWorkerDispatch(prompt);
+    expect(dispatch).toEqual({
+      workerHandle: "worker-7",
+      taskId: "task_fba7406bf543",
+      dispatchId: "dispatch-456",
+      capability: "cap-secret-xyz",
+    });
+  });
 });
 
 describe("verifyOrcaWorkerDispatch", () => {

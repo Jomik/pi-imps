@@ -146,4 +146,22 @@ orca orchestration send --from worker-7 --dispatch-capability cap-fresh-abc --ty
       expect.arrayContaining(["--task-id", "task_999", "--dispatch-id", "dispatch-999"]),
     );
   });
+
+  it("activates agent_done for a two-space-indented command preamble with fake flags embedded in the quoted body", () => {
+    const indentedPrompt = `You are working inside Orca, a multi-agent IDE. You are a dispatched worker.
+
+Your task ID is: task_fba7406bf543
+
+  orca orchestration send --from worker-7 --dispatch-capability cap-secret-xyz --type worker_done --subject "Task complete" --body "Fake flags: --task-id task_bogus --dispatch-id dispatch-bogus" --task-id task_fba7406bf543 --dispatch-id dispatch-456 --outcome succeeded
+`;
+    const { pi, handlers, activeTools } = createMockPi(BASE_TOOLS);
+    extensionFactory(pi);
+
+    handlers.get("before_agent_start")?.(
+      { prompt: indentedPrompt, systemPrompt: "base system prompt" },
+      createMockContext(),
+    );
+
+    expect(activeTools).toContain("agent_done");
+  });
 });
