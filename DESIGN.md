@@ -113,7 +113,7 @@ Resolution at summon time:
 3. Merge: if base is undefined (all tools), result is undefined (all tools) — additive tools are redundant since all tools are already available. If base is defined, result is `base ∪ additive`.
 4. Filter extensions: exclude any that provide no tools in the final allowlist
 
-Absence of frontmatter `tools` means the imp inherits the same tools as the parent session (no filtering applied). An empty list (`tools: []`) means no tools. Additive tools can only expand the base, never restrict it.
+Absence of frontmatter `tools` falls back to the settings `toolAllowlist`. Only when both frontmatter `tools` and the settings `toolAllowlist` are absent does the imp inherit the same tools as the parent session (no filtering applied). An empty list (`tools: []`) means no tools. Additive tools can only expand the base, never restrict it.
 
 If a tool name in the config doesn't correspond to a registered tool, it's silently ignored — the imp simply doesn't get that tool. (Future: surface a warning to the user.)
 
@@ -150,13 +150,13 @@ The first version does not support non-TUI clients, edit global settings or agen
 
 ### Orca Worker Bridge
 
-When Pi is launched as an Orca-dispatched worker, Orca does not load ordinary pi-imps. It instead launches Pi with the main extension manifest disabled and points it at a dedicated worker extension file shipped inside the pi-imps package (not listed in `package.json`'s `pi.extensions`, so it never auto-loads and never runs alongside the main extension), e.g.:
+When Pi is launched as an Orca-dispatched worker, it must not load ordinary pi-imps. This is the required controlled-launch contract for a future/manual host integration: the host pre-creates or launches Pi with the main extension manifest disabled and points it at a dedicated worker extension file shipped inside the pi-imps package (not listed in `package.json`'s `pi.extensions`, so it never auto-loads and never runs alongside the main extension), e.g.:
 
 ```
 pi --no-extensions -e ./node_modules/pi-imps/src/orca-worker.ts
 ```
 
-This worker extension has no agent discovery, no summon/wait/dismiss, and no available-agents system-prompt block — it is not pi-imps' ordinary session. Its only responsibilities:
+...then dispatches the task into that already-running terminal. Stock Orca `worker-start --agent pi` does not do this automatically today — pi-imps does not yet launch or manage Orca. This worker extension has no agent discovery, no summon/wait/dismiss, and no available-agents system-prompt block — it is not pi-imps' ordinary session. Its only responsibilities:
 
 - Register `agent_done` exactly once, at extension load, backed by private mutable dispatch context.
 - On Pi's `input` event, verify the full raw input text: the strict injected dispatched-worker preamble must parse, and the parsed worker handle must exactly match `ORCA_TERMINAL_HANDLE`. The input must additionally contain an exact standalone `=== TASK ===` marker line followed by a non-empty task remainder. Any omission or mismatch leaves the input unchanged (`{ action: "continue" }`) and never updates the private dispatch context.
