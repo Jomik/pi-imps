@@ -25,7 +25,7 @@ Summon an imp. Returns immediately with a generated name. Non-blocking — the i
 
 ```
 summon({
-  task: string,           // what the imp should do
+  task: string,           // what the imp should do (minimum 10 characters)
   agent: string,          // named agent to use
 }) → { name: string }
 ```
@@ -174,7 +174,7 @@ Every imp child session, and the Orca-dispatched worker's own run, registers a h
 
 ### Turn Limit
 
-A global safety net to prevent runaway imps. Default: 30 turns. Configurable in settings, not per-summon.
+A global safety net to prevent runaway imps. Default: 30 turns. Configurable in settings, not per-summon. Per-agent frontmatter `turns` overrides the global `turnLimit` when set (minimum 2).
 
 The imp is unaware of the limit. It works normally until the final turn, when a directive is injected:
 

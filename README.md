@@ -30,7 +30,7 @@ The LLM calls `summon` to launch imps, `wait` to collect results, and the output
 
 | Tool | What it does |
 |------|-------------|
-| `summon` | Launch a background imp. Requires a named `agent`. Returns immediately with a name. |
+| `summon` | Launch a background imp. Requires a named `agent` and a task description (minimum 10 characters). Returns immediately with a name. |
 | `wait` | Block until imps finish. `mode: "all"` waits for everything; `mode: "first"` returns the first to complete. Optional `names` array to target specific imps. |
 | `dismiss` | Kill running imps by name or `"all"`. |
 | `list_imps` | Check status without blocking. |

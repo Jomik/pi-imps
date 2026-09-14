@@ -48,10 +48,10 @@ export function buildOrcaCommand(argv: readonly string[]): string {
 }
 
 /** Run one `orca <args> --json` prerequisite check; throws an actionable diagnostic on any failure. */
-async function runOrcaCheck(exec: OrcaExecFn, args: string[], label: string): Promise<void> {
+async function runOrcaCheck(exec: OrcaExecFn, args: string[], label: string, signal?: AbortSignal): Promise<void> {
   let result: OrcaCheckResult;
   try {
-    result = await exec("orca", args);
+    result = await exec("orca", args, signal ? { signal } : undefined);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Orca ${label} check failed to run: ${message || "unknown error"}`);
@@ -164,6 +164,8 @@ export interface PrepareOrcaLaunchOptions {
   exec: OrcaExecFn;
   /** Injectable for tests; defaults to `process.platform`. Never mutate `process.platform` in tests. */
   platform?: NodeJS.Platform;
+  /** Abort signal checked before/after each prerequisite check and around `loader.reload()` (itself not cancellable). */
+  signal?: AbortSignal;
 }
 
 /**
@@ -179,8 +181,8 @@ export async function prepareOrcaLaunch(opts: PrepareOrcaLaunchOptions): Promise
     throw new Error(`Orca imp launches require a POSIX platform (darwin or linux); got "${platform}".`);
   }
 
-  await runOrcaCheck(opts.exec, ["status", "--json"], "status");
-  await runOrcaCheck(opts.exec, ["worktree", "current", "--json"], "current worktree");
+  await runOrcaCheck(opts.exec, ["status", "--json"], "status", opts.signal);
+  await runOrcaCheck(opts.exec, ["worktree", "current", "--json"], "current worktree", opts.signal);
 
   const model = resolveImpModel(opts.config, opts.parentModel, opts.modelRegistry);
   if (!model.provider || !model.id) {
@@ -194,7 +196,9 @@ export async function prepareOrcaLaunch(opts: PrepareOrcaLaunchOptions): Promise
   const turnLimit = resolveTurnLimit(opts.config.turnLimit, opts.settings.turnLimit);
 
   const { loader, toolAllowlist } = buildImpResourceLoader(opts.cwd, opts.config, opts.settings);
+  opts.signal?.throwIfAborted();
   await loader.reload();
+  opts.signal?.throwIfAborted();
   const { extensions } = loader.getExtensions();
   const extensionPaths = dedupePaths(
     extensions

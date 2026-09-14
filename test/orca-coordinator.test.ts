@@ -430,6 +430,59 @@ describe("OrcaCoordinator.spawn", () => {
     await expect(coordinator.spawn(baseSpawnOpts({ signal: controller.signal }))).rejects.toThrow(/aborted/);
     expect(cli.closedTerminals).toHaveLength(1);
   });
+
+  it("aborting during the Orca status prerequisite check never creates a terminal", async () => {
+    const cli = new FakeOrcaCli();
+    const controller = new AbortController();
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      if (args[0] === "status") {
+        controller.abort();
+      }
+      return originalExec(command, args, options);
+    };
+    const coordinator = makeCoordinator(cli);
+
+    await expect(coordinator.spawn(baseSpawnOpts({ signal: controller.signal }))).rejects.toThrow(/aborted/);
+    expect(cli.terminalSeq).toBe(0);
+    expect(cli.closedTerminals).toHaveLength(0);
+  });
+
+  it("aborting during the Orca worktree prerequisite check never creates a terminal", async () => {
+    const cli = new FakeOrcaCli();
+    const controller = new AbortController();
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      if (args[0] === "worktree" && args[1] === "current") {
+        controller.abort();
+      }
+      return originalExec(command, args, options);
+    };
+    const coordinator = makeCoordinator(cli);
+
+    await expect(coordinator.spawn(baseSpawnOpts({ signal: controller.signal }))).rejects.toThrow(/aborted/);
+    expect(cli.terminalSeq).toBe(0);
+    expect(cli.closedTerminals).toHaveLength(0);
+  });
+
+  it("aborting after prerequisite checks but before the resource loader reloads never creates a terminal", async () => {
+    const cli = new FakeOrcaCli();
+    const controller = new AbortController();
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      if (args[0] === "worktree" && args[1] === "current") {
+        const result = await originalExec(command, args, options);
+        controller.abort();
+        return result;
+      }
+      return originalExec(command, args, options);
+    };
+    const coordinator = makeCoordinator(cli);
+
+    await expect(coordinator.spawn(baseSpawnOpts({ signal: controller.signal }))).rejects.toThrow();
+    expect(cli.terminalSeq).toBe(0);
+    expect(cli.closedTerminals).toHaveLength(0);
+  });
 });
 
 describe("OrcaCoordinator.spawn onActivity", () => {

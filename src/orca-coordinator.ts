@@ -222,6 +222,7 @@ export class OrcaCoordinator {
       modelRegistry: opts.modelRegistry,
       settings: opts.settings,
       exec: this.exec,
+      signal: opts.signal,
     });
 
     let terminalHandle: string | undefined;

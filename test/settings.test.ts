@@ -53,6 +53,11 @@ describe("parseImpSettings", () => {
     expect(settings.turnLimit).toBe(30);
   });
 
+  it("ignores invalid turnLimit (non-integer, 2.5) and falls back to default", () => {
+    const settings = parseImpSettings({ turnLimit: 2.5 });
+    expect(settings.turnLimit).toBe(30);
+  });
+
   it("ignores invalid turnLimit (string)", () => {
     const settings = parseImpSettings({ turnLimit: "10" });
     expect(settings.turnLimit).toBe(30);

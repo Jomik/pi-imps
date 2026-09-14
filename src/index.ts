@@ -54,7 +54,7 @@ export default function (pi: ExtensionAPI): void {
         // Orca worker telemetry (turn counts, token usage) is not available
         // over the orchestration protocol, so onTurnEnd/onUsageUpdate are
         // intentionally left unwired here: Orca-dispatched imps report
-        // turns/tokens as zero. Revisit display/docs in Task 20.
+        // turns/tokens as zero.
         return coordinator.spawn({
           name: opts.name,
           task: opts.task,

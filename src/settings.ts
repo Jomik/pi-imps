@@ -18,7 +18,13 @@ const DEFAULTS: ImpSettings = {
 export function parseImpSettings(block: Record<string, unknown> | undefined): ImpSettings {
   if (!block || typeof block !== "object") return { ...DEFAULTS };
 
-  const turnLimit = typeof block.turnLimit === "number" && block.turnLimit >= 2 ? block.turnLimit : DEFAULTS.turnLimit;
+  const turnLimit =
+    typeof block.turnLimit === "number" &&
+    Number.isFinite(block.turnLimit) &&
+    Number.isInteger(block.turnLimit) &&
+    block.turnLimit >= 2
+      ? block.turnLimit
+      : DEFAULTS.turnLimit;
 
   const toolAllowlist = Array.isArray(block.toolAllowlist) ? (block.toolAllowlist as string[]) : DEFAULTS.toolAllowlist;
 

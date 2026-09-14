@@ -212,7 +212,7 @@ describe("prepareOrcaLaunch", () => {
     worktreeExit?: number;
     worktreeStdout?: string;
   }) {
-    return vi.fn(async (command: string, args: string[]) => {
+    return vi.fn(async (command: string, args: string[], _options?: { signal?: AbortSignal }) => {
       expect(command).toBe("orca");
       if (args[0] === "status") {
         if (overrides?.statusStdout !== undefined) {
@@ -655,5 +655,71 @@ describe("prepareOrcaLaunch", () => {
 
     expect(plan.command).toContain("'Body with '\\''quote'\\'' and spaces'");
     expect(plan.command.startsWith("'pi'")).toBe(true);
+  });
+
+  // ── abort signal ──────────────────────────────────────────────────────
+
+  it("passes the signal through to the status prerequisite check", async () => {
+    const exec = makeExec();
+    const controller = new AbortController();
+    await prepareOrcaLaunch({
+      cwd,
+      config: makeAgent(),
+      parentModel,
+      parentThinkingLevel: "low",
+      modelRegistry: makeModelRegistry([parentModel]),
+      settings: makeSettings(),
+      exec,
+      platform: "linux",
+      signal: controller.signal,
+    });
+
+    for (const call of exec.mock.calls) {
+      expect(call[2]).toEqual({ signal: controller.signal });
+    }
+  });
+
+  it("rejects when the signal is already aborted before the status check runs", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const exec = vi.fn(async (_command: string, _args: string[], options?: { signal?: AbortSignal }) => {
+      if (options?.signal?.aborted) throw new Error("aborted");
+      return { stdout: JSON.stringify({ ok: true }), stderr: "", code: 0 };
+    });
+    await expect(
+      prepareOrcaLaunch({
+        cwd,
+        config: makeAgent(),
+        parentModel,
+        parentThinkingLevel: "low",
+        modelRegistry: makeModelRegistry([parentModel]),
+        settings: makeSettings(),
+        exec,
+        platform: "linux",
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(/aborted/);
+  });
+
+  it("rejects when the signal is aborted between the worktree check and the resource loader reload", async () => {
+    const controller = new AbortController();
+    const exec = vi.fn(async (_command: string, args: string[]) => {
+      const result = { stdout: JSON.stringify({ ok: true }), stderr: "", code: 0 };
+      if (args[0] === "worktree") controller.abort();
+      return result;
+    });
+    await expect(
+      prepareOrcaLaunch({
+        cwd,
+        config: makeAgent(),
+        parentModel,
+        parentThinkingLevel: "low",
+        modelRegistry: makeModelRegistry([parentModel]),
+        settings: makeSettings(),
+        exec,
+        platform: "linux",
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
   });
 });
