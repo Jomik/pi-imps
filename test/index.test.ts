@@ -532,5 +532,116 @@ ${task}`;
       expect(result.terminate).toBe(true);
       expect(exec).toHaveBeenCalledTimes(2);
     });
+
+    it("an invalid/unverified prompt reaches the turn limit without a directive, report, or abort", () => {
+      const { pi, handlers, sendUserMessage, exec } = createMockPi(true, { "imp-turn-limit": "2" });
+      extensionFactory(pi);
+
+      const inputHandler = handlers.get("input");
+      const turnEndHandler = handlers.get("turn_end");
+      if (!inputHandler || !turnEndHandler) throw new Error("handlers not registered");
+
+      // Not an Orca dispatch preamble at all: dispatch is never set.
+      inputHandler({ type: "input", text: "Please fix the failing test.", source: "interactive" }, undefined);
+
+      const abort = vi.fn();
+      for (let i = 0; i < 5; i++) {
+        turnEndHandler(assistantTurnEnd("progress"), { abort });
+      }
+
+      expect(sendUserMessage).not.toHaveBeenCalled();
+      expect(exec).not.toHaveBeenCalled();
+      expect(abort).not.toHaveBeenCalled();
+    });
+
+    it("agent_done called during the active final turn is sealed as truncated regardless of the claimed outcome", async () => {
+      const { pi, handlers, registerTool, exec } = createMockPi(true, { "imp-turn-limit": "3" });
+      extensionFactory(pi);
+
+      const inputHandler = handlers.get("input");
+      const turnEndHandler = handlers.get("turn_end");
+      if (!inputHandler || !turnEndHandler) throw new Error("handlers not registered");
+
+      inputHandler({ type: "input", text: workerPrompt("Do the thing."), source: "interactive" }, undefined);
+      turnEndHandler(assistantTurnEnd("turn one"), { abort: vi.fn() });
+      turnEndHandler(assistantTurnEnd("turn two"), { abort: vi.fn() });
+
+      const tool = registerTool.mock.calls[0][0];
+      const result = await tool.execute(
+        "call-1",
+        { outcome: "succeeded", summary: "All done!" },
+        undefined,
+        undefined,
+        {},
+      );
+
+      expect(result.terminate).toBe(true);
+      expect(result.content[0]).toEqual({ type: "text", text: "Completion reported." });
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(exec).toHaveBeenCalledWith(
+        "orca",
+        expect.arrayContaining(["--subject", "pi-imps:truncated", "--outcome", "failed"]),
+      );
+    });
+
+    it("a failed automatic final-turn report leaves the run unsealed; agent_settled retries and seals pi-imps:truncated", async () => {
+      const { pi, handlers, exec } = createMockPi(true, { "imp-turn-limit": "2" });
+      extensionFactory(pi);
+      exec
+        .mockResolvedValueOnce({ stdout: "", stderr: "unauthorized", code: 1 })
+        .mockResolvedValueOnce({ stdout: "{}", stderr: "", code: 0 });
+
+      const inputHandler = handlers.get("input");
+      const turnEndHandler = handlers.get("turn_end");
+      const settledHandler = handlers.get("agent_settled");
+      if (!inputHandler || !turnEndHandler || !settledHandler) throw new Error("handlers not registered");
+
+      inputHandler({ type: "input", text: workerPrompt("Do the thing."), source: "interactive" }, undefined);
+      turnEndHandler(assistantTurnEnd("turn one"), { abort: vi.fn() });
+      await turnEndHandler(assistantTurnEnd("turn two"), { abort: vi.fn() });
+
+      expect(exec).toHaveBeenCalledTimes(1);
+
+      await settledHandler({}, undefined);
+
+      expect(exec).toHaveBeenCalledTimes(2);
+      expect(exec).toHaveBeenNthCalledWith(
+        2,
+        "orca",
+        expect.arrayContaining(["--subject", "pi-imps:truncated", "--outcome", "failed"]),
+      );
+    });
+
+    it("an in-flight automatic report blocks a concurrent agent_settled attempt; only one send seals completion", async () => {
+      const { pi, handlers } = createMockPi(true, { "imp-turn-limit": "2" });
+      extensionFactory(pi);
+
+      let resolveExec: (value: { stdout: string; stderr: string; code: number }) => void = () => {};
+      const controlledExec = vi.fn().mockReturnValue(
+        new Promise((resolve) => {
+          resolveExec = resolve;
+        }),
+      );
+      (pi as unknown as { exec: unknown }).exec = controlledExec;
+
+      const inputHandler = handlers.get("input");
+      const turnEndHandler = handlers.get("turn_end");
+      const settledHandler = handlers.get("agent_settled");
+      if (!inputHandler || !turnEndHandler || !settledHandler) throw new Error("handlers not registered");
+
+      inputHandler({ type: "input", text: workerPrompt("Do the thing."), source: "interactive" }, undefined);
+      turnEndHandler(assistantTurnEnd("turn one"), { abort: vi.fn() });
+      const pendingTurnEnd = turnEndHandler(assistantTurnEnd("turn two"), { abort: vi.fn() });
+
+      // The automatic report from turn_end is in flight; a concurrent
+      // agent_settled attempt must not send a second report.
+      await settledHandler({}, undefined);
+      expect(controlledExec).toHaveBeenCalledTimes(1);
+
+      resolveExec({ stdout: "{}", stderr: "", code: 0 });
+      await pendingTurnEnd;
+
+      expect(controlledExec).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -116,7 +116,7 @@ const STATUS_SUBJECTS: Record<ImpLifecycleStatus, string> = {
 };
 
 /** Build the stable subject line encoding a worker's lifecycle status. */
-export function buildStatusSubject(_workerHandle: string, status: ImpLifecycleStatus): string {
+export function buildStatusSubject(status: ImpLifecycleStatus): string {
   return STATUS_SUBJECTS[status];
 }
 
@@ -148,7 +148,7 @@ export function buildOrcaSendArgs(dispatch: OrcaWorkerDispatch, status: ImpLifec
     "--type",
     "worker_done",
     "--subject",
-    buildStatusSubject(dispatch.workerHandle, status),
+    buildStatusSubject(status),
     "--body",
     body,
     "--task-id",
@@ -298,7 +298,11 @@ export function createAgentDoneTool(report: AgentDoneReport): ToolDefinition<typ
       await report(params.outcome, params.summary);
 
       return {
-        content: [{ type: "text", text: `Reported ${params.outcome}.` }],
+        // Generic, outcome-independent text: the actual reported status may
+        // be overridden (e.g. to `truncated` during an active final turn),
+        // so the model-visible result must never assert a specific outcome
+        // that could contradict it.
+        content: [{ type: "text", text: "Completion reported." }],
         details: undefined,
         terminate: true,
       };
@@ -348,14 +352,26 @@ function extractAssistantText(message: unknown): string | undefined {
  * Independently enforces `turnLimit`: queues the existing `FINAL_TURN_DIRECTIVE`
  * on the penultimate turn, and on the final turn (or on settling without a
  * report) sends an authenticated internal completion with a stable status
- * the model never controls.
+ * the model never controls. `turn_end` and `agent_settled` enforcement is
+ * gated on a verified active dispatch — without one, neither the directive,
+ * a completion attempt, nor an abort is ever triggered. An `agent_done` call
+ * received during the active final turn is sealed as `truncated` regardless
+ * of the model-claimed outcome, and `agent_settled` reports `truncated`
+ * (rather than `failed`) whenever the turn limit was already reached,
+ * preserving that status across a failed-then-retried report.
  */
 export function initOrcaWorker(pi: ExtensionAPI, turnLimit: number): void {
   let dispatch: OrcaWorkerDispatch | undefined;
   let state: ImpLifecycleState = createImpLifecycleState();
 
   const report: AgentDoneReport = (outcome, summary) => {
-    const status: ImpLifecycleStatus = outcome === "succeeded" ? "completed" : "failed";
+    // During an active final turn (turnCount already at turnLimit - 1, after
+    // the FINAL TURN directive but before that turn's own turn_end fires),
+    // the local turn limit takes precedence: the report is sealed as
+    // `truncated` regardless of the model-claimed outcome, since the run is
+    // being cut off either way.
+    const isFinalTurn = state.turnCount === turnLimit - 1;
+    const status: ImpLifecycleStatus = isFinalTurn ? "truncated" : outcome === "succeeded" ? "completed" : "failed";
     return reportImpCompletion(dispatch, state, status, summary, (command, args) => pi.exec(command, args));
   };
 
@@ -376,6 +392,11 @@ export function initOrcaWorker(pi: ExtensionAPI, turnLimit: number): void {
   });
 
   pi.on("turn_end", async (event, ctx) => {
+    // Lifecycle enforcement only applies to a verified, active dispatch;
+    // unverified/invalid worker input must never receive the FINAL TURN
+    // directive, an attempt report, or an abort.
+    if (!dispatch) return;
+
     state.turnCount++;
 
     const text = extractAssistantText(event.message);
@@ -404,10 +425,17 @@ export function initOrcaWorker(pi: ExtensionAPI, turnLimit: number): void {
   });
 
   pi.on("agent_settled", async () => {
+    // Same gating as turn_end: no verified dispatch means nothing to
+    // enforce or report.
+    if (!dispatch) return;
     if (state.completionSealed) return;
+    // Preserve truncation on retry: if the local turn limit was already
+    // reached (e.g. the automatic turn_end report failed and stayed
+    // unsealed), the status must still be `truncated`, not `failed`.
+    const status: ImpLifecycleStatus = state.turnCount >= turnLimit ? "truncated" : "failed";
     const body = state.lastOutput.trim() || STABLE_NO_OUTPUT_FALLBACK;
     try {
-      await reportImpCompletion(dispatch, state, "failed", body, (command, args) => pi.exec(command, args));
+      await reportImpCompletion(dispatch, state, status, body, (command, args) => pi.exec(command, args));
     } catch {
       // No parent backend exists yet to observe this failure; swallowing
       // it here avoids an unhandled rejection since there is no retry path.

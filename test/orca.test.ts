@@ -229,15 +229,15 @@ describe("buildOrcaSendArgs", () => {
 
 describe("stable lifecycle status subject", () => {
   it("builds exact namespaced subjects with no identifiers or model text", () => {
-    expect(buildStatusSubject("worker-7", "completed")).toBe("pi-imps:completed");
-    expect(buildStatusSubject("worker-7", "failed")).toBe("pi-imps:failed");
-    expect(buildStatusSubject("worker-7", "truncated")).toBe("pi-imps:truncated");
+    expect(buildStatusSubject("completed")).toBe("pi-imps:completed");
+    expect(buildStatusSubject("failed")).toBe("pi-imps:failed");
+    expect(buildStatusSubject("truncated")).toBe("pi-imps:truncated");
   });
 
   it("parses completed, failed, and truncated subjects exactly", () => {
-    expect(parseImpLifecycleStatus(buildStatusSubject("worker-7", "completed"))).toBe("completed");
-    expect(parseImpLifecycleStatus(buildStatusSubject("worker-7", "failed"))).toBe("failed");
-    expect(parseImpLifecycleStatus(buildStatusSubject("worker-7", "truncated"))).toBe("truncated");
+    expect(parseImpLifecycleStatus(buildStatusSubject("completed"))).toBe("completed");
+    expect(parseImpLifecycleStatus(buildStatusSubject("failed"))).toBe("failed");
+    expect(parseImpLifecycleStatus(buildStatusSubject("truncated"))).toBe("truncated");
   });
 
   it("is not influenced by arbitrary model-provided summary text", () => {
@@ -245,6 +245,10 @@ describe("stable lifecycle status subject", () => {
     // model-controlled body/summary string can never parse as a status.
     expect(parseImpLifecycleStatus("pi-imps:completed and also succeeded and failed")).toBeUndefined();
     expect(parseImpLifecycleStatus("the model claims: pi-imps:completed")).toBeUndefined();
+  });
+
+  it("buildStatusSubject accepts only status, no worker handle parameter", () => {
+    expect(buildStatusSubject.length).toBe(1);
   });
 });
 
@@ -382,7 +386,7 @@ describe("agent_done tool", () => {
 
     expect(report).toHaveBeenCalledWith("succeeded", "All good.");
     expect(result.terminate).toBe(true);
-    expect(result.content[0]).toEqual({ type: "text", text: "Reported succeeded." });
+    expect(result.content[0]).toEqual({ type: "text", text: "Completion reported." });
     const text = (result.content[0] as { text: string }).text;
     expect(text).not.toMatch(/orca/i);
     expect(text).not.toMatch(/dispatch/i);
