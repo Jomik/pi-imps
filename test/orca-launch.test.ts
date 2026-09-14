@@ -526,6 +526,63 @@ describe("prepareOrcaLaunch", () => {
     expect(plan.argv.at(-1)).toContain("agent_done");
   });
 
+  it("falls back to a cwd-resolved absolute path when resolvedPath is missing and ext.path is relative", async () => {
+    // Give the relative path a real package.json (named differently from
+    // pi-imps) so the shared extension selector's package-name walk resolves
+    // a name other than pi-imps's own; chdir into the temp cwd so that walk
+    // (which resolves relative paths against the process cwd) finds it
+    // instead of this repo's own package.json.
+    mkdirSync(join(cwd, "relative", "ext"), { recursive: true });
+    writeFileSync(join(cwd, "relative", "ext", "package.json"), JSON.stringify({ name: "pi-relative" }));
+    writeFileSync(join(cwd, "relative", "ext", "index.ts"), "export default () => {}");
+
+    const relExt = makeExt("pi-relative", ["read"]);
+    relExt.resolvedPath = "";
+    relExt.path = "relative/ext/index.ts";
+    mockExtensions = [relExt];
+
+    const exec = makeExec();
+    const originalCwd = process.cwd();
+    process.chdir(cwd);
+    try {
+      const plan = await prepareOrcaLaunch({
+        cwd,
+        config: makeAgent(),
+        parentModel,
+        parentThinkingLevel: "low",
+        modelRegistry: makeModelRegistry([parentModel]),
+        settings: makeSettings(),
+        exec,
+        platform: "linux",
+      });
+
+      expect(plan.extensionPaths).toEqual([join(cwd, "relative/ext/index.ts")]);
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it("keeps pseudo (inline) extension paths excluded even without a resolvedPath", async () => {
+    const pseudoExt = makeExt("pi-pseudo", ["read"]);
+    pseudoExt.resolvedPath = "";
+    pseudoExt.path = "<inline:pi-pseudo>";
+    mockExtensions = [pseudoExt];
+
+    const exec = makeExec();
+    const plan = await prepareOrcaLaunch({
+      cwd,
+      config: makeAgent(),
+      parentModel,
+      parentThinkingLevel: "low",
+      modelRegistry: makeModelRegistry([parentModel]),
+      settings: makeSettings(),
+      exec,
+      platform: "linux",
+    });
+
+    expect(plan.extensionPaths).toEqual([]);
+  });
+
   it("dedupes selected extension paths while preserving order", async () => {
     const sharedExt = makeExt("pi-shared", ["read"], "/fake/shared/src/index.ts");
     mockExtensions = [sharedExt, sharedExt];
