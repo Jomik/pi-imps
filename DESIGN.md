@@ -153,7 +153,7 @@ The first version does not support non-TUI clients, edit global settings or agen
 When Pi is launched as an Orca-dispatched worker, it must not load ordinary pi-imps. This is the controlled-launch contract `OrcaCoordinator` itself follows when `orca.enabled` is `true` (see Orca Imp Execution above): it creates an Orca terminal in the current worktree running Pi with the main extension manifest disabled, pi-imps' single entrypoint loaded explicitly, and the `is-imp` custom flag set so that same entrypoint initializes worker mode instead of ordinary pi-imps, e.g.:
 
 ```
-pi --no-extensions -e ./node_modules/pi-imps/src/index.ts --is-imp
+pi --no-extensions -e ./node_modules/pi-imps/src/index.ts --is-imp   # abbreviated/illustrative
 ```
 
 ...then dispatches the task into that already-running terminal. When the `is-imp` flag is set, `src/index.ts` initializes worker mode and returns before registering any ordinary session hooks, tools, or commands — no agent discovery, no summon/wait/dismiss, and no available-agents system-prompt block. Its only responsibilities:
@@ -199,8 +199,9 @@ Each Orca-dispatched imp is launched as a controlled worker, built from the exac
 
 - Same resolved model, thinking level (including the `max`→`xhigh` mapping), system prompt, and turn limit as an in-process session for that agent.
 - Same allowed-tool extension providers, selected the same way (agent frontmatter `tools`, settings `toolAllowlist`, and global+project additive `agents.<name>.tools` grants), plus `additionalExtensions`, which always load regardless of the tool allowlist — unchanged semantics, just also applied to the Orca launch path.
-- Launched with `--no-extensions` plus only the resolved extension paths and pi-imps' own worker entrypoint, so no unrelated host extensions leak into the worker.
-- Launched with `--is-imp`, which puts the worker into Orca worker mode instead of ordinary pi-imps: it registers `agent_done` and enforces the turn limit locally, but never registers summon/wait/dismiss/list_imps and never discovers agents — no recursive delegation.
+- Launched with `--no-extensions --no-skills --no-prompt-templates --no-themes` plus only the resolved extension paths and pi-imps' own worker entrypoint, so no unrelated host extensions, skills, prompt templates, or themes leak into the worker.
+- Launched with the resolved model, thinking level, system prompt, and turn limit passed explicitly as CLI arguments (`--model`, `--thinking`, `--system-prompt`, `--imp-turn-limit`), and `--is-imp`, which puts the worker into Orca worker mode instead of ordinary pi-imps: it registers `agent_done` and enforces the turn limit locally, but never registers summon/wait/dismiss/list_imps and never discovers agents — no recursive delegation.
+- `--tools` is passed only when an explicit tool allowlist was resolved; when there is no explicit allowlist, `--tools` is omitted entirely and every tool among the selected extensions/builtins is available. Whenever an explicit allowlist is passed, `agent_done` is always unioned into it so worker completion can never be configured away.
 - Orca's injected dispatched-worker preamble (identifiers, capability token, coordinator instructions, the embedded reporting command) is scrubbed before the model ever sees the prompt; only the task text remains.
 
 Turn-limit enforcement has parity with in-process imps: the worker independently counts turns against the same resolved limit, injects the same FINAL TURN directive on the penultimate turn, and reports a `truncated` outcome if the limit is reached — taking precedence over a same-turn `agent_done` call. A model-reported `succeeded`/`failed` via `agent_done` maps to the imp's `completed`/`failed` status; a limit-triggered or otherwise-unreported settle maps to `truncated`. These three outcomes are carried over Orca's mailbox as stable, non-model-controlled status subjects, never trusting model-provided text for the routing itself.
