@@ -133,9 +133,16 @@ export function extractTaskAfterMarker(text: string): string | undefined {
   return task;
 }
 
-/** Redact a capability token from diagnostic text before it can reach the model or UI. */
-function redactCapability(text: string, capability: string): string {
-  return capability ? text.split(capability).join("[redacted]") : text;
+/**
+ * Redact all private dispatch identifiers (worker handle, task id, dispatch
+ * id, capability) from diagnostic text before it can reach the model or UI.
+ */
+function redactDispatchIdentifiers(text: string, dispatch: OrcaWorkerDispatch): string {
+  let redacted = text;
+  for (const identifier of [dispatch.workerHandle, dispatch.taskId, dispatch.dispatchId, dispatch.capability]) {
+    if (identifier) redacted = redacted.split(identifier).join("[redacted]");
+  }
+  return redacted;
 }
 
 interface ExecResultLike {
@@ -179,7 +186,7 @@ export function createAgentDoneTool(
       if (!dispatch) {
         // Throwing (rather than returning) sets `isError: true` on the tool
         // result per ToolDefinition conventions, so this failure is actionable.
-        throw new Error("No active Orca dispatch for this session; cannot report completion.");
+        throw new Error("No active dispatch for this session; cannot report completion.");
       }
 
       const args = buildOrcaSendArgs(dispatch, params.outcome, params.summary);
@@ -190,17 +197,17 @@ export function createAgentDoneTool(
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new Error(
-          `Failed to report completion to Orca: ${redactCapability(message || "unknown error", dispatch.capability)}`,
+          `Failed to report completion: ${redactDispatchIdentifiers(message || "unknown error", dispatch)}`,
         );
       }
 
       if (result.code !== 0) {
-        const detail = redactCapability((result.stderr || result.stdout || "no output").trim(), dispatch.capability);
-        throw new Error(`Orca rejected the completion report (exit ${result.code}): ${detail || "no output"}`);
+        const detail = redactDispatchIdentifiers((result.stderr || result.stdout || "no output").trim(), dispatch);
+        throw new Error(`The completion report was rejected (exit ${result.code}): ${detail || "no output"}`);
       }
 
       return {
-        content: [{ type: "text", text: `Reported ${params.outcome} to Orca.` }],
+        content: [{ type: "text", text: `Reported ${params.outcome}.` }],
         details: undefined,
       };
     },

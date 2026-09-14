@@ -235,13 +235,22 @@ describe("agent_done tool", () => {
     );
 
     expect(exec).toHaveBeenCalledWith("orca", buildOrcaSendArgs(dispatch, "succeeded", "All good."));
-    expect(result.content[0]).toEqual({ type: "text", text: "Reported succeeded to Orca." });
+    expect(result.content[0]).toEqual({ type: "text", text: "Reported succeeded." });
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).not.toMatch(/orca/i);
+    expect(text).not.toMatch(/dispatch/i);
+    expect(text).not.toContain(dispatch.workerHandle);
+    expect(text).not.toContain(dispatch.taskId);
+    expect(text).not.toContain(dispatch.dispatchId);
+    expect(text).not.toContain(dispatch.capability);
   });
 
-  it("throws a non-empty actionable error on nonzero exit without exposing the capability", async () => {
-    const exec = vi
-      .fn()
-      .mockResolvedValue({ stdout: "", stderr: `unauthorized capability ${dispatch.capability}`, code: 1 });
+  it("throws a non-empty actionable error on nonzero exit without exposing any dispatch identifier", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      stdout: "",
+      stderr: `unauthorized: w=${dispatch.workerHandle} t=${dispatch.taskId} d=${dispatch.dispatchId} c=${dispatch.capability}`,
+      code: 1,
+    });
     const tool = createAgentDoneTool(() => dispatch, exec);
 
     await expect(
@@ -262,15 +271,31 @@ describe("agent_done tool", () => {
         undefined,
         undefined as never,
       );
+      throw new Error("expected execute to throw");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       expect(message.length).toBeGreaterThan(0);
+      expect(message).not.toContain(dispatch.workerHandle);
+      expect(message).not.toContain(dispatch.taskId);
+      expect(message).not.toContain(dispatch.dispatchId);
       expect(message).not.toContain(dispatch.capability);
+      expect(message).not.toMatch(/orca/i);
+      expect(message).not.toMatch(/\bcli\b/i);
+      expect(message).not.toMatch(/terminal handle/i);
+      expect(message).not.toMatch(/task id/i);
+      expect(message).not.toMatch(/dispatch id/i);
+      expect(message).not.toMatch(/capability/i);
     }
   });
 
-  it("throws a non-empty actionable error when exec throws, without exposing the capability", async () => {
-    const exec = vi.fn().mockRejectedValue(new Error(`network error near ${dispatch.capability}`));
+  it("throws a non-empty actionable error when exec throws, without exposing any dispatch identifier", async () => {
+    const exec = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          `network error: w=${dispatch.workerHandle} t=${dispatch.taskId} d=${dispatch.dispatchId} c=${dispatch.capability}`,
+        ),
+      );
     const tool = createAgentDoneTool(() => dispatch, exec);
 
     try {
@@ -285,17 +310,42 @@ describe("agent_done tool", () => {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       expect(message.length).toBeGreaterThan(0);
+      expect(message).not.toContain(dispatch.workerHandle);
+      expect(message).not.toContain(dispatch.taskId);
+      expect(message).not.toContain(dispatch.dispatchId);
       expect(message).not.toContain(dispatch.capability);
+      expect(message).not.toMatch(/orca/i);
+      expect(message).not.toMatch(/\bcli\b/i);
+      expect(message).not.toMatch(/terminal handle/i);
+      expect(message).not.toMatch(/task id/i);
+      expect(message).not.toMatch(/dispatch id/i);
+      expect(message).not.toMatch(/capability/i);
     }
   });
 
-  it("throws when no active dispatch is available", async () => {
+  it("throws a host-neutral error when no active dispatch is available", async () => {
     const exec = vi.fn();
     const tool = createAgentDoneTool(() => undefined, exec);
 
-    await expect(
-      tool.execute("call-1", { outcome: "succeeded", summary: "Done." }, undefined, undefined, undefined as never),
-    ).rejects.toThrow(/No active Orca dispatch/);
+    try {
+      await tool.execute(
+        "call-1",
+        { outcome: "succeeded", summary: "Done." },
+        undefined,
+        undefined,
+        undefined as never,
+      );
+      throw new Error("expected execute to throw");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      expect(message).toMatch(/No active dispatch/);
+      expect(message).not.toMatch(/orca/i);
+      expect(message).not.toMatch(/\bcli\b/i);
+      expect(message).not.toMatch(/terminal handle/i);
+      expect(message).not.toMatch(/task id/i);
+      expect(message).not.toMatch(/dispatch id/i);
+      expect(message).not.toMatch(/capability/i);
+    }
     expect(exec).not.toHaveBeenCalled();
   });
 });

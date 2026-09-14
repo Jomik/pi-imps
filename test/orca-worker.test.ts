@@ -162,7 +162,7 @@ describe("orca-worker input transform", () => {
     const tool = registerTool.mock.calls[0][0];
     await expect(
       tool.execute("call-1", { outcome: "succeeded", summary: "Done." }, undefined, undefined, {}),
-    ).rejects.toThrow(/No active Orca dispatch/);
+    ).rejects.toThrow(/No active dispatch/);
     expect(exec).not.toHaveBeenCalled();
   });
 
