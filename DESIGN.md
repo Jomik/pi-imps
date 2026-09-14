@@ -11,9 +11,9 @@ We need a small, composable primitive: summon an agent, get its result, done.
 1. **Minimal core** — summon, wait, dismiss. Everything else is optional or external.
 2. **Low config** — sensible defaults, minimal setup. Configuration lives in `~/.pi/agent/imps.json` (optional). Agent frontmatter is the per-agent configuration surface.
 3. **Composable** — other extensions can build on top. Don't bake in observability chrome, custom renderers, or delegation strategies.
-4. **No recursion** — imps are leaf workers. Only the parent session spawns imps. For ordinary in-process summoned imp sessions, this is enforced by not loading pi-imps on the child session — imp tools are never registered, nothing to filter out. Orca-dispatched workers are launched with the dedicated worker extension in place of the main pi-imps extension (see Orca Worker Bridge below), which never registers summon/wait/dismiss/list_imps in the first place — nothing to filter out, preserving the same leaf-worker invariant.
+4. **No recursion** — imps are leaf workers. Only the parent session spawns imps. For ordinary in-process summoned imp sessions, this is enforced by not loading pi-imps on the child session — imp tools are never registered, nothing to filter out. Orca-dispatched workers are launched with the `is-imp` flag set (see Orca Worker Bridge below), which initializes worker mode instead of ordinary pi-imps and never registers summon/wait/dismiss/list_imps in the first place — nothing to filter out, preserving the same leaf-worker invariant.
 5. **Quiet** — no injected messages, no delegation reminders, no rotating hints. The LLM decides when to delegate based on its system prompt.
-6. **Isolated bridges** — host-specific bridges (e.g. Orca) live in their own dedicated extension entrypoint, never in the main pi-imps extension. The main extension has no knowledge of Orca.
+6. **Isolated bridges** — host-specific bridges (e.g. Orca) are selected by an explicit launch flag (`is-imp`) on the single pi-imps entrypoint, never active by default alongside ordinary pi-imps behavior. The main extension has no knowledge of Orca beyond that flag check.
 
 ## Core API Surface
 
@@ -150,13 +150,13 @@ The first version does not support non-TUI clients, edit global settings or agen
 
 ### Orca Worker Bridge
 
-When Pi is launched as an Orca-dispatched worker, it must not load ordinary pi-imps. This is the required controlled-launch contract for a future/manual host integration: the host pre-creates or launches Pi with the main extension manifest disabled and points it at a dedicated worker extension file shipped inside the pi-imps package (not listed in `package.json`'s `pi.extensions`, so it never auto-loads and never runs alongside the main extension), e.g.:
+When Pi is launched as an Orca-dispatched worker, it must not load ordinary pi-imps. This is the required controlled-launch contract for a future/manual host integration: the host pre-creates or launches Pi with the main extension manifest disabled, loads pi-imps' single entrypoint explicitly, and sets the `is-imp` custom flag so the same entrypoint initializes worker mode instead of ordinary pi-imps, e.g.:
 
 ```
-pi --no-extensions -e ./node_modules/pi-imps/src/orca-worker.ts
+pi --no-extensions -e ./node_modules/pi-imps/src/index.ts --is-imp
 ```
 
-...then dispatches the task into that already-running terminal. Stock Orca `worker-start --agent pi` does not do this automatically today — pi-imps does not yet launch or manage Orca. This worker extension has no agent discovery, no summon/wait/dismiss, and no available-agents system-prompt block — it is not pi-imps' ordinary session. Its only responsibilities:
+...then dispatches the task into that already-running terminal. Stock Orca `worker-start --agent pi` does not do this automatically today — pi-imps does not yet launch or manage Orca. When the `is-imp` flag is set, `src/index.ts` initializes worker mode and returns before registering any ordinary session hooks, tools, or commands — no agent discovery, no summon/wait/dismiss, and no available-agents system-prompt block. Its only responsibilities:
 
 - Register `agent_done` exactly once, at extension load, backed by private mutable dispatch context.
 - On Pi's `input` event, verify the full raw input text: the strict injected dispatched-worker preamble must parse, and the parsed worker handle must exactly match `ORCA_TERMINAL_HANDLE`. The input must additionally contain an exact standalone `=== TASK ===` marker line followed by a non-empty task remainder. Any omission or mismatch leaves the input unchanged (`{ action: "continue" }`) and never updates the private dispatch context.

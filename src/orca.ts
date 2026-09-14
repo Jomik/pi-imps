@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 /**
@@ -212,4 +212,40 @@ export function createAgentDoneTool(
       };
     },
   };
+}
+
+/**
+ * Initialize Orca-dispatched worker mode on an already-created `ExtensionAPI`.
+ *
+ * Not a second extension entrypoint — invoked by `src/index.ts`'s default
+ * export when the `is-imp` flag is set, before any ordinary pi-imps session
+ * hooks/tools/commands are registered. Registers `agent_done` exactly once,
+ * backed by private mutable dispatch context.
+ *
+ * Verifies Orca's injected dispatched-worker preamble on the raw `input`
+ * event text, strips it down to the task text after an exact standalone
+ * `=== TASK ===` marker line, and transforms the input so no Orca preamble,
+ * identifiers, capability, coordinator instructions, or embedded CLI command
+ * ever reach the model.
+ */
+export function initOrcaWorker(pi: ExtensionAPI): void {
+  let dispatch: OrcaWorkerDispatch | undefined;
+
+  pi.registerTool(
+    createAgentDoneTool(
+      () => dispatch,
+      (command, args) => pi.exec(command, args),
+    ),
+  );
+
+  pi.on("input", (event) => {
+    const verified = verifyOrcaWorkerDispatch(event.text);
+    if (!verified) return { action: "continue" };
+
+    const task = extractTaskAfterMarker(event.text);
+    if (!task) return { action: "continue" };
+
+    dispatch = verified;
+    return { action: "transform", text: task };
+  });
 }

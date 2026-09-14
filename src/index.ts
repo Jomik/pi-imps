@@ -2,12 +2,24 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type AgentDiagnostic, buildAgentsBlock, discoverAgents } from "./agents.js";
 import { createImpsCommand } from "./command.js";
 import { createNamePool } from "./names.js";
+import { initOrcaWorker } from "./orca.js";
 import { loadImpSettings } from "./settings.js";
 import { runningImps } from "./state.js";
 import { dismissAllImps, dismissTool, listImpsTool, summonTool, waitTool } from "./tools.js";
 import type { AgentConfig, Imp } from "./types.js";
 
 export default function (pi: ExtensionAPI): void {
+  pi.registerFlag("is-imp", {
+    description: "Run as an Orca-dispatched imp worker instead of an ordinary pi-imps session",
+    type: "boolean",
+    default: false,
+  });
+
+  if (pi.getFlag("is-imp")) {
+    initOrcaWorker(pi);
+    return;
+  }
+
   const imps: Map<string, Imp> = new Map();
   const namePool = createNamePool();
   const agents: AgentConfig[] = [];
