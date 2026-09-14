@@ -11,8 +11,11 @@ import type { AgentConfig, ImpSettings, ThinkingLevel } from "./types.js";
  * Owns exactly one lazily-created orchestration run, one active-dispatch
  * record map keyed by `dispatchId`, and one serialized mailbox consumer
  * draining `worker_done` deliveries for that run. Does not create child
- * worktrees, retry failed operations, or reuse terminals — every spawn gets
- * its own task/terminal/dispatch against the shared run.
+ * worktrees or reuse terminals — every spawn gets its own
+ * task/terminal/dispatch against the shared run. Spawn and worker-lifecycle
+ * commands are never retried; only a transient mailbox `check`/`ack`
+ * execution/protocol failure gets exactly one retry before the mailbox is
+ * treated as fatally broken.
  *
  * Never logs command args, the system prompt, the task spec, or the
  * dispatch capability; only bounded, actionable error text is surfaced.
@@ -190,8 +193,12 @@ export class OrcaCoordinator {
   private mailboxAbortController: AbortController | undefined;
   private shuttingDown = false;
 
-  constructor(exec: OrcaExecFn) {
+  /** Default delay before the single retry attempt for a transient mailbox check/ack failure. Overridable for deterministic fast tests. */
+  private readonly mailboxRetryDelayMs: number;
+
+  constructor(exec: OrcaExecFn, mailboxRetryDelayMs = 250) {
     this.exec = exec;
+    this.mailboxRetryDelayMs = mailboxRetryDelayMs;
   }
 
   /**
@@ -218,6 +225,7 @@ export class OrcaCoordinator {
     });
 
     let terminalHandle: string | undefined;
+    let capturedDispatchId: string | undefined;
     try {
       const run = await this.ensureRun();
 
@@ -258,6 +266,9 @@ export class OrcaCoordinator {
         "worker start",
         opts.signal,
       );
+      if (typeof workerResult.dispatchId === "string" && workerResult.dispatchId) {
+        capturedDispatchId = workerResult.dispatchId;
+      }
       if (workerResult.state !== "ready") {
         throw new Error(
           boundedError(`Orca worker start did not reach ready state (state: ${String(workerResult.state)})`),
@@ -281,6 +292,16 @@ export class OrcaCoordinator {
 
       return { abort: () => this.abortDispatch(record) };
     } catch (err) {
+      if (capturedDispatchId) {
+        await this.safeExec(
+          ["orchestration", "worker-stop", "--dispatch", capturedDispatchId, "--json"],
+          "worker stop (cleanup)",
+        );
+        await this.safeExec(
+          ["orchestration", "worker-release", "--dispatch", capturedDispatchId, "--json"],
+          "worker release (cleanup)",
+        );
+      }
       if (terminalHandle) {
         await this.safeExec(["terminal", "close", "--terminal", terminalHandle, "--json"], "terminal close (cleanup)");
       }
@@ -372,13 +393,51 @@ export class OrcaCoordinator {
     });
   }
 
+  /**
+   * Resolves after `mailboxRetryDelayMs`, rejecting immediately if `signal`
+   * is (or becomes) aborted, so a retry is never attempted once shutdown
+   * has begun.
+   */
+  private delay(signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new Error("aborted"));
+        return;
+      }
+      const timer = setTimeout(resolve, this.mailboxRetryDelayMs);
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+    });
+  }
+
+  /**
+   * Run one mailbox `check`/`ack` call, retrying exactly once after a short
+   * delay on a transient execution/protocol failure. Never retries if the
+   * signal is already aborted. Only mailbox calls use this — spawn and
+   * worker-lifecycle commands are never retried.
+   */
+  private async execMailboxWithRetry<R>(args: string[], label: string, signal: AbortSignal): Promise<R> {
+    try {
+      return await execOrca<R>(this.exec, args, label, signal);
+    } catch (err) {
+      if (signal.aborted) throw err;
+      await this.delay(signal);
+      return execOrca<R>(this.exec, args, label, signal);
+    }
+  }
+
   /** Serialized mailbox loop: one `check --wait` consumer at a time, draining/ack-ing every delivery it receives. */
   private async runMailboxLoop(runId: string, signal: AbortSignal): Promise<void> {
     while (!this.shuttingDown && this.active.size > 0) {
       let resp: CheckResult;
       try {
-        resp = await execOrca<CheckResult>(
-          this.exec,
+        resp = await this.execMailboxWithRetry<CheckResult>(
           [
             "orchestration",
             "check",
@@ -421,8 +480,7 @@ export class OrcaCoordinator {
 
       let ackResult: CheckResult;
       try {
-        ackResult = await execOrca<CheckResult>(
-          this.exec,
+        ackResult = await this.execMailboxWithRetry<CheckResult>(
           ["orchestration", "check", "--run", runId, "--ack", deliveryId, "--json"],
           "mailbox ack",
           signal,
@@ -486,6 +544,14 @@ export class OrcaCoordinator {
         .filter((record) => !record.settled)
         .map(async (record) => {
           record.settled = true;
+          await this.safeExec(
+            ["orchestration", "worker-stop", "--dispatch", record.dispatchId, "--json"],
+            "worker stop (mailbox failure)",
+          );
+          await this.safeExec(
+            ["orchestration", "worker-release", "--dispatch", record.dispatchId, "--json"],
+            "worker release (mailbox failure)",
+          );
           await this.safeExec(
             ["terminal", "close", "--terminal", record.terminalHandle, "--json"],
             "terminal close (mailbox failure)",

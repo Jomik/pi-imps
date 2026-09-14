@@ -83,6 +83,8 @@ class FakeOrcaCli {
   failNextRunCreate = false;
   failCheck: Error | undefined;
   failAckFor: string | undefined;
+  transientCheckFailures = 0;
+  transientAckFailures = 0;
 
   /** Queue a `check --wait` response (in order). */
   pushDelivery(delivery: Delivery) {
@@ -169,6 +171,10 @@ class FakeOrcaCli {
         if (this.failAckFor && deliveryId === this.failAckFor) {
           return { stdout: "", stderr: "ack exploded", code: 1 };
         }
+        if (this.transientAckFailures > 0) {
+          this.transientAckFailures--;
+          return { stdout: "", stderr: "ack exploded (transient)", code: 1 };
+        }
         const chained = this.ackChain.get(deliveryId);
         return { stdout: JSON.stringify(ok(chained ? { ...chained } : {})), stderr: "", code: 0 };
       }
@@ -176,6 +182,10 @@ class FakeOrcaCli {
       // observes abort promptly) instead of resolving in a tight microtask
       // loop, which would otherwise starve the event loop across iterations.
       await delay(0, options?.signal);
+      if (this.transientCheckFailures > 0) {
+        this.transientCheckFailures--;
+        return { stdout: "", stderr: "check exploded (transient)", code: 1 };
+      }
       if (this.failCheck) {
         return { stdout: "", stderr: this.failCheck.message, code: 1 };
       }
@@ -247,10 +257,12 @@ function makeSettings(overrides: Partial<ImpSettings> = {}): ImpSettings {
  * Wraps `cli.exec` in a stable indirection function so that reassigning or
  * `vi.spyOn`-wrapping `cli.exec` after construction (as several tests below
  * do) is still observed by the coordinator, which only ever holds the one
- * function reference passed to its constructor.
+ * function reference passed to its constructor. Uses a zero-length mailbox
+ * retry delay so the single retry the coordinator performs never slows
+ * down or destabilizes tests.
  */
 function makeCoordinator(cli: FakeOrcaCli): OrcaCoordinator {
-  return new OrcaCoordinator((command, args, options) => cli.exec(command, args, options));
+  return new OrcaCoordinator((command, args, options) => cli.exec(command, args, options), 0);
 }
 
 let cwd: string;
@@ -352,7 +364,7 @@ describe("OrcaCoordinator.spawn", () => {
     expect(cli.closedTerminals).toHaveLength(1);
   });
 
-  it("rejects when worker-start reports a non-ready state", async () => {
+  it("rejects when worker-start reports a non-ready state, and stops/releases the returned dispatchId before closing the terminal", async () => {
     const cli = new FakeOrcaCli();
     const originalExec = cli.exec;
     cli.exec = async (command, args, options) => {
@@ -364,6 +376,8 @@ describe("OrcaCoordinator.spawn", () => {
     const coordinator = makeCoordinator(cli);
 
     await expect(coordinator.spawn(baseSpawnOpts())).rejects.toThrow(/ready state/);
+    expect(cli.stoppedDispatches).toEqual(["dispatch_x"]);
+    expect(cli.releasedDispatches).toEqual(["dispatch_x"]);
     expect(cli.closedTerminals).toHaveLength(1);
   });
 
@@ -682,6 +696,97 @@ describe("OrcaCoordinator mailbox routing", () => {
 
     expect(maxInFlight).toBeLessThanOrEqual(1);
   });
+
+  it("retries a transient mailbox check failure exactly once, then drains normally", async () => {
+    const cli = new FakeOrcaCli();
+    const coordinator = makeCoordinator(cli);
+    const onComplete = vi.fn();
+
+    cli.transientCheckFailures = 1;
+    await coordinator.spawn(baseSpawnOpts({ onComplete }));
+
+    cli.pushDelivery({
+      deliveryId: "delivery-1",
+      messages: [
+        payloadMessage({
+          dispatchId: "dispatch_1",
+          taskId: "task_1",
+          from: "handle_1",
+          subject: "pi-imps:completed",
+          body: "done after retry",
+          outcome: "succeeded",
+        }),
+      ],
+    });
+
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalled());
+    await coordinator.shutdown();
+
+    expect(onComplete).toHaveBeenCalledWith({ output: "done after retry" });
+    expect(cli.stoppedDispatches).toEqual([]);
+  });
+
+  it("retries a transient mailbox ack failure exactly once, then completes normally", async () => {
+    const cli = new FakeOrcaCli();
+    const coordinator = makeCoordinator(cli);
+    const onComplete = vi.fn();
+
+    await coordinator.spawn(baseSpawnOpts({ onComplete }));
+
+    cli.transientAckFailures = 1;
+    cli.pushDelivery({
+      deliveryId: "delivery-1",
+      messages: [
+        payloadMessage({
+          dispatchId: "dispatch_1",
+          taskId: "task_1",
+          from: "handle_1",
+          subject: "pi-imps:completed",
+          body: "done after ack retry",
+          outcome: "succeeded",
+        }),
+      ],
+    });
+
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalled());
+    await coordinator.shutdown();
+
+    expect(onComplete).toHaveBeenCalledWith({ output: "done after ack retry" });
+  });
+
+  it("fails all active dispatches when a mailbox check fails twice in a row (retry exhausted)", async () => {
+    const cli = new FakeOrcaCli();
+    const coordinator = makeCoordinator(cli);
+    const onComplete = vi.fn();
+
+    cli.transientCheckFailures = 2;
+    await coordinator.spawn(baseSpawnOpts({ onComplete }));
+
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    await coordinator.shutdown();
+
+    expect(onComplete.mock.calls[0][0].error).toEqual(expect.stringMatching(/.+/));
+    expect(cli.stoppedDispatches).toEqual(["dispatch_1"]);
+    expect(cli.releasedDispatches).toEqual(["dispatch_1"]);
+    expect(cli.closedTerminals).toHaveLength(1);
+  });
+
+  it("never retries spawn or worker-lifecycle commands: a single worker-start failure is not retried", async () => {
+    const cli = new FakeOrcaCli();
+    const originalExec = cli.exec;
+    let workerStartCalls = 0;
+    cli.exec = async (command, args, options) => {
+      if (args[0] === "orchestration" && args[1] === "worker-start") {
+        workerStartCalls++;
+        return { stdout: "", stderr: "worker-start exploded", code: 1 };
+      }
+      return originalExec(command, args, options);
+    };
+    const coordinator = makeCoordinator(cli);
+
+    await expect(coordinator.spawn(baseSpawnOpts())).rejects.toThrow(/worker-start exploded/);
+    expect(workerStartCalls).toBe(1);
+  });
 });
 
 describe("OrcaCoordinator abort / shutdown / fatal mailbox", () => {
@@ -700,7 +805,7 @@ describe("OrcaCoordinator abort / shutdown / fatal mailbox", () => {
     expect(cli.releasedDispatches).toEqual(["dispatch_1"]);
   });
 
-  it("a fatal mailbox error fails every active imp exactly once with a non-empty bounded error, closing terminals", async () => {
+  it("a fatal mailbox error fails every active imp exactly once with a non-empty bounded error, stopping/releasing/closing each dispatch", async () => {
     const cli = new FakeOrcaCli();
     const coordinator = makeCoordinator(cli);
     const onCompleteA = vi.fn();
@@ -711,15 +816,16 @@ describe("OrcaCoordinator abort / shutdown / fatal mailbox", () => {
 
     cli.failCheck = new Error("mailbox exploded");
 
-    // Give the mailbox loop a tick to hit the failing check call.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(onCompleteA).toHaveBeenCalledTimes(1);
+      expect(onCompleteB).toHaveBeenCalledTimes(1);
+    });
 
-    expect(onCompleteA).toHaveBeenCalledTimes(1);
     expect(onCompleteA.mock.calls[0][0].error).toEqual(expect.stringMatching(/.+/));
     expect(onCompleteA.mock.calls[0][0].error.length).toBeLessThanOrEqual(500);
-    expect(onCompleteB).toHaveBeenCalledTimes(1);
     expect(cli.closedTerminals).toHaveLength(2);
+    expect(cli.stoppedDispatches.sort()).toEqual(["dispatch_1", "dispatch_2"]);
+    expect(cli.releasedDispatches.sort()).toEqual(["dispatch_1", "dispatch_2"]);
 
     await coordinator.shutdown();
   });
