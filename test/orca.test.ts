@@ -4,7 +4,6 @@ import {
   createAgentDoneTool,
   extractTaskAfterMarker,
   ORCA_DISPATCHED_WORKER_PREAMBLE,
-  ORCA_RESTRICTED_TOOLS,
   parseOrcaWorkerDispatch,
   verifyOrcaWorkerDispatch,
 } from "../src/orca.js";
@@ -176,12 +175,6 @@ describe("extractTaskAfterMarker", () => {
 
   it("rejects a whitespace-only remainder after the marker", () => {
     expect(extractTaskAfterMarker("=== TASK ===\n   \n  ")).toBeUndefined();
-  });
-});
-
-describe("ORCA_RESTRICTED_TOOLS", () => {
-  it("names the four recursive imp tools", () => {
-    expect(ORCA_RESTRICTED_TOOLS).toEqual(["summon", "wait", "dismiss", "list_imps"]);
   });
 });
 

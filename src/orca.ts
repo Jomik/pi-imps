@@ -16,9 +16,6 @@ import { Type } from "typebox";
 export const ORCA_DISPATCHED_WORKER_PREAMBLE =
   "You are working inside Orca, a multi-agent IDE. You are a dispatched worker.";
 
-/** Tool names removed from the active set for a verified Orca dispatched worker. */
-export const ORCA_RESTRICTED_TOOLS = ["summon", "wait", "dismiss", "list_imps"] as const;
-
 export interface OrcaWorkerDispatch {
   readonly workerHandle: string;
   readonly taskId: string;
@@ -118,9 +115,6 @@ export function buildOrcaSendArgs(
     "--json",
   ];
 }
-
-/** Exact standalone marker line separating an Orca worker preamble from the task text. */
-export const ORCA_TASK_MARKER_LINE = "=== TASK ===";
 
 /**
  * Strictly extract the task text following an exact standalone `=== TASK ===`
