@@ -135,6 +135,28 @@ Each imp has a status visible in `wait` and `list_imps` results:
 
 Imps are leaf workers. They cannot summon sub-imps — pi-imps is not loaded on imp sessions. Only the parent session orchestrates.
 
+### Orca-backed imps (optional)
+
+By default, `summon` runs imps in-process, in the same Pi process as the parent session. Enable Orca-backed imp execution by setting `orca.enabled` in the **global** `~/.pi/agent/imps.json`:
+
+```json
+{ "orca": { "enabled": true } }
+```
+
+Default is `false` (local in-process mode). This only affects *how* a summoned imp runs — the `summon`, `wait`, `dismiss`, and `list_imps` tool schemas and behavior seen by the LLM are unchanged either way.
+
+When enabled, each summoned imp runs as an Orca-dispatched worker in its own terminal in the **current worktree** — local POSIX hosts only (`darwin`/`linux`). There is no remote launch, no Windows support, and pi-imps never creates or merges a child worktree. Multiple imps can run concurrently, each in its own terminal; internally, each session still has exactly one orchestration run and one mailbox consumer per pi-imps session, regardless of how many imps are active.
+
+If Orca is unavailable, reports no current worktree, or the platform is unsupported, `summon` fails explicitly — the imp comes back with a `failed` status and an actionable error. There is no silent fallback to local in-process spawning.
+
+Each Orca-dispatched imp is a controlled worker with the same effective configuration as an in-process imp: the same resolved model, thinking level, system prompt, and turn limit, and the same resolved tool allowlist/extensions (including `additionalExtensions`, which always load regardless of the tool allowlist — same semantics as local imps). It's launched with `--no-extensions` plus only those resolved extension paths, and with `--is-imp`, which puts it into a restricted worker mode: it gets `agent_done` to report its outcome, but never gets summon/wait/dismiss/list_imps and cannot discover or summon sub-imps. Orca's injected worker preamble (identifiers, capability token, coordinator instructions) is scrubbed before the model ever sees the prompt.
+
+Turn-limit enforcement has the same behavior as local imps: the same resolved turn limit is enforced, the same final-turn wrap-up directive is sent, and a limit-triggered cutoff always reports `truncated`, taking precedence over a same-turn `agent_done` call. Success/failure reported via `agent_done` maps to `completed`/`failed` as usual.
+
+Every terminal pi-imps creates for an Orca-dispatched imp is explicitly closed when that imp completes, is dismissed, or the session ends — cleanup isn't left to Orca's `worker-release` alone (which does not close the terminal by itself).
+
+**Known limitation:** Orca workers currently expose no token/turn telemetry over the orchestration protocol, so `list_imps`/`wait` stats for Orca-dispatched imps stay at zero or unavailable. This means missing telemetry, not that the imp actually used zero turns or tokens.
+
 ## Settings reference
 
 All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
@@ -147,7 +169,8 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
   "additionalExtensions": ["pi-sandbox"],
   "agents": {
     "mason": { "tools": ["run_tests"] }
-  }
+  },
+  "orca": { "enabled": false }
 }
 ```
 
@@ -155,6 +178,7 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
 |---------|------|---------|-------------|
 | `turnLimit` | number | 30 | Max turns per imp (minimum 2) |
 | `toolAllowlist` | string[] | all tools | Default tool allowlist for all imps. Overridden by agent frontmatter `tools`. |
+| `orca.enabled` | boolean | `false` | Run summoned imps as Orca-dispatched workers in the current worktree instead of in-process. Requires a local POSIX host (darwin/linux) and an available Orca with a current worktree; see [Orca-backed imps](#orca-backed-imps-optional). |
 | `additionalExtensions` | string[] | none | Extensions that always load on imp sessions regardless of tool filtering |
 | `agents` | object | none | Per-agent additive tool grants. Keys are agent names. Tools are unioned with the effective base allowlist: agent frontmatter `tools` when present, otherwise global `toolAllowlist`. |
 
