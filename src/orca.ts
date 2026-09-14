@@ -196,7 +196,11 @@ interface ExecResultLike {
   code: number;
 }
 
-export type OrcaExecFn = (command: string, args: string[]) => Promise<ExecResultLike>;
+export type OrcaExecFn = (
+  command: string,
+  args: string[],
+  options?: { signal?: AbortSignal },
+) => Promise<ExecResultLike>;
 
 /**
  * Private per-dispatch lifecycle state: turn count, last observed assistant
