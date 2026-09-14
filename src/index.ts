@@ -3,9 +3,10 @@ import { type AgentDiagnostic, buildAgentsBlock, discoverAgents } from "./agents
 import { createImpsCommand } from "./command.js";
 import { createNamePool } from "./names.js";
 import { initOrcaWorker, parseImpTurnLimit } from "./orca.js";
+import { OrcaCoordinator } from "./orca-coordinator.js";
 import { loadImpSettings } from "./settings.js";
 import { runningImps } from "./state.js";
-import { dismissAllImps, dismissTool, listImpsTool, summonTool, waitTool } from "./tools.js";
+import { dismissAllImps, dismissTool, type ImpSpawner, listImpsTool, summonTool, waitTool } from "./tools.js";
 import type { AgentConfig, Imp } from "./types.js";
 
 export default function (pi: ExtensionAPI): void {
@@ -35,6 +36,41 @@ export default function (pi: ExtensionAPI): void {
   // Cached once per session_start; empty string means no agents.
   let agentsBlock = "";
 
+  const settings = loadImpSettings();
+
+  // One coordinator per active session when Orca is enabled. session_start
+  // reuses an existing coordinator if one is already active (e.g. a reload
+  // without an intervening switch/shutdown), so active records and the
+  // mailbox consumer are never orphaned. session_before_switch and
+  // session_shutdown clear and await shutdown; the next session_start then
+  // creates a fresh one.
+  let coordinator: OrcaCoordinator | undefined;
+
+  const orcaSpawner: ImpSpawner | undefined = settings.orca.enabled
+    ? async (opts) => {
+        if (!coordinator) {
+          throw new Error("Orca coordinator is not available; cannot summon an Orca-dispatched imp.");
+        }
+        // Orca worker telemetry (turn counts, token usage) is not available
+        // over the orchestration protocol, so onTurnEnd/onUsageUpdate are
+        // intentionally left unwired here: Orca-dispatched imps report
+        // turns/tokens as zero. Revisit display/docs in Task 20.
+        return coordinator.spawn({
+          name: opts.name,
+          task: opts.task,
+          signal: opts.signal,
+          cwd: opts.cwd,
+          config: opts.config,
+          parentModel: opts.parentModel,
+          parentThinkingLevel: opts.parentThinkingLevel,
+          modelRegistry: opts.modelRegistry,
+          settings: opts.settings,
+          onActivity: opts.onToolActivity,
+          onComplete: opts.onComplete,
+        });
+      }
+    : undefined;
+
   // ── Agent discovery ────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx) => {
@@ -46,6 +82,10 @@ export default function (pi: ExtensionAPI): void {
     if (diagnostics.length > 0) {
       const summary = diagnostics.map((d) => `- ${d.filePath}: ${d.message}`).join("\n");
       ctx.ui.notify(`pi-imps: ${diagnostics.length} invalid agent definition(s) skipped:\n${summary}`, "warning");
+    }
+
+    if (settings.orca.enabled && !coordinator) {
+      coordinator = new OrcaCoordinator((command, args, options) => pi.exec(command, args, options));
     }
   });
 
@@ -69,21 +109,29 @@ export default function (pi: ExtensionAPI): void {
 
   // ── Cleanup on shutdown / session switch ────────────────────────────────
 
-  pi.on("session_before_switch", () => {
+  pi.on("session_before_switch", async () => {
     dismissAllImps(imps, namePool);
     imps.clear();
+    if (coordinator) {
+      const active = coordinator;
+      coordinator = undefined;
+      await active.shutdown();
+    }
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     dismissAllImps(imps, namePool);
     imps.clear();
+    if (coordinator) {
+      const active = coordinator;
+      coordinator = undefined;
+      await active.shutdown();
+    }
   });
 
   // ── Tools ──────────────────────────────────────────────────────────────
 
-  const settings = loadImpSettings();
-
-  pi.registerTool(summonTool(imps, agents, namePool, settings, () => pi.getThinkingLevel()));
+  pi.registerTool(summonTool(imps, agents, namePool, settings, () => pi.getThinkingLevel(), orcaSpawner));
   pi.registerTool(waitTool(imps));
   pi.registerTool(dismissTool(imps, namePool));
   pi.registerTool(listImpsTool(imps));

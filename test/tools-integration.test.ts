@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ImpSpawnerOptions } from "../src/tools.js";
 import type { AgentConfig, ImpSettings } from "../src/types.js";
 import { createMockContext, createMockSession, type MockSessionConfig } from "./helpers/index.js";
 
@@ -489,6 +490,111 @@ describe("project config tools", () => {
         tools: expect.arrayContaining(["read", "edit", "run_tests"]),
       }),
     );
+  });
+});
+
+describe("custom spawner (ImpSpawner injection)", () => {
+  it("receives the generated name plus all resolved parent inputs", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+
+    let resolveHandle!: () => void;
+    const handlePromise = new Promise<{ abort(): Promise<void> }>((resolve) => {
+      resolveHandle = () => resolve({ abort: async () => {} });
+    });
+
+    const spawner = vi.fn((_opts: ImpSpawnerOptions) => handlePromise);
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings(), () => "high", spawner);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+
+    expect(spawner).toHaveBeenCalledTimes(1);
+    const opts = spawner.mock.calls[0][0];
+    expect(opts.name).toBe("imp-1");
+    expect(opts.task).toBe("analyze the codebase thoroughly");
+    expect(opts.config).toEqual(testAgent);
+    expect(opts.cwd).toBe(ctx.cwd);
+    expect(opts.parentModel).toBe(ctx.model);
+    expect(opts.parentThinkingLevel).toBe("high");
+    expect(opts.modelRegistry).toBe(ctx.modelRegistry);
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+    expect(opts.settings).toEqual(makeSettings());
+    expect(typeof opts.onTurnEnd).toBe("function");
+    expect(typeof opts.onToolActivity).toBe("function");
+    expect(typeof opts.onUsageUpdate).toBe("function");
+    expect(typeof opts.onComplete).toBe("function");
+
+    resolveHandle();
+    await handlePromise;
+  });
+
+  it("successful completion via the injected spawner integrates with wait", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings(), undefined, async (opts) => {
+      opts.onComplete({ output: "custom spawner result" });
+      return { abort: async () => {} };
+    });
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    const json = parseResult(result);
+
+    expect(json).toEqual([{ name: "imp-1", status: "completed", agent: "coder", output: "custom spawner result" }]);
+  });
+
+  it("a rejected spawn maps its exact error message onto the failed imp", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+
+    const spawner = vi.fn(async () => {
+      throw new Error("orca coordinator unavailable");
+    });
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings(), undefined, spawner);
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    const json = parseResult(result);
+
+    expect(json[0].status).toBe("failed");
+    expect(json[0].error).toBe("orca coordinator unavailable");
+  });
+
+  it("dismiss-before-ready aborts the resolved handle without overwriting the dismissed status", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+
+    const abort = vi.fn(async () => {});
+    let resolveHandle!: (handle: { abort(): Promise<void> }) => void;
+    const handlePromise = new Promise<{ abort(): Promise<void> }>((resolve) => {
+      resolveHandle = resolve;
+    });
+    const spawner = vi.fn(() => handlePromise);
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings(), undefined, spawner);
+    const dismiss = dismissTool(imps, namePool);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+
+    // Dismiss before the spawner's handle resolves.
+    await dismiss.execute("tc2", { name: "imp-1" }, undefined, undefined, ctx);
+
+    // Now let the spawn resolve — it must be aborted, not treated as a fresh session.
+    resolveHandle({ abort });
+    await handlePromise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(abort).toHaveBeenCalledTimes(1);
   });
 });
 

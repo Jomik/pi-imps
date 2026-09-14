@@ -418,6 +418,28 @@ describe("OrcaCoordinator.spawn", () => {
   });
 });
 
+describe("OrcaCoordinator.spawn onActivity", () => {
+  it("reports concise lifecycle stages in order, with no task/system-prompt content", async () => {
+    const cli = new FakeOrcaCli();
+    const coordinator = makeCoordinator(cli);
+    const onActivity = vi.fn();
+
+    await coordinator.spawn(baseSpawnOpts({ onActivity }));
+
+    expect(onActivity.mock.calls.map((c) => c[0])).toEqual([
+      "preparing",
+      "starting terminal",
+      "waiting for Pi",
+      "dispatching",
+      "working",
+    ]);
+    for (const [stage] of onActivity.mock.calls) {
+      expect(stage).not.toContain("do the thing");
+      expect(stage).not.toContain("You are a coder");
+    }
+  });
+});
+
 describe("OrcaCoordinator mailbox routing", () => {
   it("routes out-of-order worker_done messages by dispatch id, and completed/failed/truncated map correctly", async () => {
     const cli = new FakeOrcaCli();

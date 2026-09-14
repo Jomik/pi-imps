@@ -34,7 +34,7 @@ export interface OrcaSpawnOptions {
   parentThinkingLevel: ThinkingLevel;
   modelRegistry: ModelRegistry;
   settings: ImpSettings;
-  /** Reserved for future activity-message routing; not invoked in this version (only `worker_done` is consumed). */
+  /** Called with concise lifecycle stage labels as the spawn progresses; never includes task/system-prompt content. */
   onActivity: (activity: string) => void;
   onComplete: (result: OrcaSpawnResult) => void;
 }
@@ -206,6 +206,7 @@ export class OrcaCoordinator {
       throw new Error("Orca coordinator is shutting down; refusing to spawn a new imp.");
     }
 
+    opts.onActivity("preparing");
     const plan = await prepareOrcaLaunch({
       cwd: opts.cwd,
       config: opts.config,
@@ -220,6 +221,7 @@ export class OrcaCoordinator {
     try {
       const run = await this.ensureRun();
 
+      opts.onActivity("starting terminal");
       const terminalResult = await execOrca<TerminalCreateResult>(
         this.exec,
         ["terminal", "create", "--worktree", "current", "--title", opts.name, "--command", plan.command, "--json"],
@@ -228,6 +230,7 @@ export class OrcaCoordinator {
       );
       terminalHandle = requireNonEmptyString(terminalResult.terminal?.handle, "terminal create");
 
+      opts.onActivity("waiting for Pi");
       const waitResult = await execOrca<TerminalWaitResult>(
         this.exec,
         ["terminal", "wait", "--terminal", terminalHandle, "--for", "tui-idle", "--timeout-ms", "60000", "--json"],
@@ -240,6 +243,7 @@ export class OrcaCoordinator {
         );
       }
 
+      opts.onActivity("dispatching");
       const taskResult = await execOrca<TaskCreateResult>(
         this.exec,
         ["orchestration", "task-create", "--run", run.id, "--task-title", opts.name, "--spec", opts.task, "--json"],
@@ -272,6 +276,8 @@ export class OrcaCoordinator {
 
       this.active.set(dispatchId, record);
       this.ensureMailbox(run.id);
+
+      opts.onActivity("working");
 
       return { abort: () => this.abortDispatch(record) };
     } catch (err) {
