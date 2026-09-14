@@ -19,14 +19,16 @@ interface MockPi {
   registerCommand: ReturnType<typeof vi.fn>;
   registerFlag: ReturnType<typeof vi.fn>;
   exec: ReturnType<typeof vi.fn>;
+  sendUserMessage: ReturnType<typeof vi.fn>;
 }
 
-function createMockPi(isImp = false): MockPi {
+function createMockPi(isImp = false, flags: Record<string, unknown> = {}): MockPi {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const registerTool = vi.fn();
   const registerCommand = vi.fn();
   const registerFlag = vi.fn();
   const exec = vi.fn().mockResolvedValue({ stdout: "{}", stderr: "", code: 0 });
+  const sendUserMessage = vi.fn();
   const pi = {
     on: vi.fn((name: string, handler: (event: unknown, ctx: unknown) => unknown) => {
       handlers.set(name, handler);
@@ -34,11 +36,16 @@ function createMockPi(isImp = false): MockPi {
     registerTool,
     registerCommand,
     registerFlag,
-    getFlag: vi.fn((name: string) => (name === "is-imp" ? isImp : undefined)),
+    getFlag: vi.fn((name: string) => {
+      if (name === "is-imp") return isImp;
+      if (name in flags) return flags[name];
+      return undefined;
+    }),
     getThinkingLevel: vi.fn(() => "off"),
     exec,
+    sendUserMessage,
   } as unknown as ExtensionAPI;
-  return { pi, handlers, registerTool, registerCommand, registerFlag, exec };
+  return { pi, handlers, registerTool, registerCommand, registerFlag, exec, sendUserMessage };
 }
 
 describe("ordinary pi-imps extension behavior", () => {
@@ -103,7 +110,8 @@ describe("imp worker mode (is-imp flag)", () => {
     expect(handlers.has("session_before_switch")).toBe(false);
     expect(handlers.has("session_shutdown")).toBe(false);
     expect(handlers.has("turn_start")).toBe(false);
-    expect(handlers.has("turn_end")).toBe(false);
+    expect(handlers.has("turn_end")).toBe(true);
+    expect(handlers.has("agent_settled")).toBe(true);
     expect(handlers.has("tool_execution_end")).toBe(false);
     expect(handlers.has("input")).toBe(true);
   });
@@ -264,6 +272,265 @@ ${task}`;
         "orca",
         expect.arrayContaining(["--task-id", "task_999", "--dispatch-id", "dispatch-999"]),
       );
+    });
+
+    it("second verified dispatch resets turn/lifecycle state", () => {
+      const { pi, handlers, sendUserMessage } = createMockPi(true, { "imp-turn-limit": "3" });
+      extensionFactory(pi);
+
+      const inputHandler = handlers.get("input");
+      const turnEndHandler = handlers.get("turn_end");
+      if (!inputHandler || !turnEndHandler) throw new Error("handlers not registered");
+
+      inputHandler({ type: "input", text: workerPrompt("First task."), source: "interactive" }, undefined);
+      turnEndHandler(
+        { type: "turn_end", turnIndex: 0, message: { role: "assistant", content: [] } },
+        { abort: vi.fn() },
+      );
+      expect(sendUserMessage).not.toHaveBeenCalled();
+
+      // Re-verify a fresh dispatch: turn/lifecycle state must reset.
+      inputHandler(
+        {
+          type: "input",
+          text: workerPrompt("Second task.", { taskId: "task_999", dispatchId: "dispatch-999" }),
+          source: "interactive",
+        },
+        undefined,
+      );
+
+      // With reset state, the first turn of the new dispatch should not
+      // trigger the penultimate-turn directive (limit is 3, penultimate is
+      // turnCount === 2 — it would already have fired without a reset).
+      turnEndHandler(
+        { type: "turn_end", turnIndex: 0, message: { role: "assistant", content: [] } },
+        { abort: vi.fn() },
+      );
+      expect(sendUserMessage).not.toHaveBeenCalled();
+
+      // Second turn of the new dispatch reaches the penultimate turn.
+      turnEndHandler(
+        { type: "turn_end", turnIndex: 1, message: { role: "assistant", content: [] } },
+        { abort: vi.fn() },
+      );
+      expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("tool_result handler uses normalizeEmptyToolError", () => {
+      const { pi, handlers } = createMockPi(true);
+      extensionFactory(pi);
+
+      const handler = handlers.get("tool_result");
+      if (!handler) throw new Error("tool_result handler not registered");
+
+      const result = handler(
+        { toolName: "some_tool", isError: true, content: [{ type: "text", text: "   " }] },
+        undefined,
+      ) as { content: Array<{ type: string; text: string }> } | undefined;
+
+      expect(result).toEqual({
+        content: [{ type: "text", text: 'Tool "some_tool" failed without an error message' }],
+      });
+    });
+  });
+
+  describe("turn limit lifecycle", () => {
+    const originalHandle = process.env.ORCA_TERMINAL_HANDLE;
+
+    beforeEach(() => {
+      process.env.ORCA_TERMINAL_HANDLE = "worker-7";
+    });
+
+    afterEach(() => {
+      if (originalHandle === undefined) delete process.env.ORCA_TERMINAL_HANDLE;
+      else process.env.ORCA_TERMINAL_HANDLE = originalHandle;
+    });
+
+    const CAPABILITY = "cap-secret-xyz";
+
+    function workerPrompt(task: string) {
+      return `You are working inside Orca, a multi-agent IDE. You are a dispatched worker.
+
+Your task ID is: task_fba7406bf543
+
+orca orchestration send --from worker-7 --dispatch-capability ${CAPABILITY} --type worker_done --subject "Task complete" --body "Implemented the feature." --task-id task_fba7406bf543 --dispatch-id dispatch-456 --outcome succeeded
+
+=== TASK ===
+${task}`;
+    }
+
+    function assistantTurnEnd(text: string) {
+      return { type: "turn_end", turnIndex: 0, message: { role: "assistant", content: [{ type: "text", text }] } };
+    }
+
+    it("registers both custom flags", () => {
+      const { pi, registerFlag } = createMockPi(true);
+      extensionFactory(pi);
+
+      expect(registerFlag).toHaveBeenCalledWith("is-imp", expect.objectContaining({ type: "boolean" }));
+      expect(registerFlag).toHaveBeenCalledWith("imp-turn-limit", expect.objectContaining({ type: "string" }));
+    });
+
+    it("fails worker startup on an invalid --imp-turn-limit", () => {
+      const { pi } = createMockPi(true, { "imp-turn-limit": "1" });
+      expect(() => extensionFactory(pi)).toThrow(/imp-turn-limit/);
+    });
+
+    it("uses the default turn limit when unset", () => {
+      const { pi, handlers, sendUserMessage } = createMockPi(true);
+      extensionFactory(pi);
+
+      const inputHandler = handlers.get("input");
+      const turnEndHandler = handlers.get("turn_end");
+      if (!inputHandler || !turnEndHandler) throw new Error("handlers not registered");
+
+      inputHandler({ type: "input", text: workerPrompt("Do the thing."), source: "interactive" }, undefined);
+      for (let i = 0; i < 28; i++) {
+        turnEndHandler(assistantTurnEnd("progress"), { abort: vi.fn() });
+      }
+      expect(sendUserMessage).not.toHaveBeenCalled();
+      turnEndHandler(assistantTurnEnd("progress"), { abort: vi.fn() });
+      expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("queues the exact FINAL_TURN_DIRECTIVE with deliverAs steer on the penultimate turn", async () => {
+      const { FINAL_TURN_DIRECTIVE } = await import("../src/session.js");
+      const { pi, handlers, sendUserMessage } = createMockPi(true, { "imp-turn-limit": "3" });
+      extensionFactory(pi);
+
+      const inputHandler = handlers.get("input");
+      const turnEndHandler = handlers.get("turn_end");
+      if (!inputHandler || !turnEndHandler) throw new Error("handlers not registered");
+
+      inputHandler({ type: "input", text: workerPrompt("Do the thing."), source: "interactive" }, undefined);
+      turnEndHandler(assistantTurnEnd("turn one"), { abort: vi.fn() });
+      turnEndHandler(assistantTurnEnd("turn two"), { abort: vi.fn() });
+
+      expect(sendUserMessage).toHaveBeenCalledWith(FINAL_TURN_DIRECTIVE, { deliverAs: "steer" });
+    });
+
+    it("final turn awaits the controlled exec promise before aborting; sends truncated subject, outcome failed, and the last assistant output", async () => {
+      const { pi, handlers } = createMockPi(true, { "imp-turn-limit": "2" });
+      extensionFactory(pi);
+
+      let resolveExec: (value: { stdout: string; stderr: string; code: number }) => void = () => {};
+      const controlledExec = vi.fn().mockReturnValue(
+        new Promise((resolve) => {
+          resolveExec = resolve;
+        }),
+      );
+      (pi as unknown as { exec: unknown }).exec = controlledExec;
+
+      const inputHandler = handlers.get("input");
+      const turnEndHandler = handlers.get("turn_end");
+      if (!inputHandler || !turnEndHandler) throw new Error("handlers not registered");
+
+      inputHandler({ type: "input", text: workerPrompt("Do the thing."), source: "interactive" }, undefined);
+      turnEndHandler(assistantTurnEnd("first turn"), { abort: vi.fn() });
+
+      const abort = vi.fn();
+      const pending = turnEndHandler(assistantTurnEnd("Final output text."), { abort });
+
+      // exec is in flight; abort must not have been called yet.
+      expect(controlledExec).toHaveBeenCalledTimes(1);
+      expect(abort).not.toHaveBeenCalled();
+      expect(controlledExec).toHaveBeenCalledWith(
+        "orca",
+        expect.arrayContaining([
+          "--subject",
+          "pi-imps:truncated",
+          "--outcome",
+          "failed",
+          "--body",
+          "Final output text.",
+        ]),
+      );
+
+      resolveExec({ stdout: "{}", stderr: "", code: 0 });
+      await pending;
+
+      expect(abort).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to the stable no-output message when no assistant output was recorded before completion", async () => {
+      const { STABLE_NO_OUTPUT_FALLBACK } = await import("../src/orca.js");
+      const { pi, handlers, exec } = createMockPi(true, { "imp-turn-limit": "2" });
+      extensionFactory(pi);
+
+      const inputHandler = handlers.get("input");
+      const turnEndHandler = handlers.get("turn_end");
+      if (!inputHandler || !turnEndHandler) throw new Error("handlers not registered");
+
+      inputHandler({ type: "input", text: workerPrompt("Do the thing."), source: "interactive" }, undefined);
+      turnEndHandler(
+        { type: "turn_end", turnIndex: 0, message: { role: "assistant", content: [] } },
+        { abort: vi.fn() },
+      );
+
+      const abort = vi.fn();
+      await turnEndHandler({ type: "turn_end", turnIndex: 1, message: { role: "assistant", content: [] } }, { abort });
+
+      expect(abort).toHaveBeenCalledTimes(1);
+      expect(exec).toHaveBeenCalledWith("orca", expect.arrayContaining(["--body", STABLE_NO_OUTPUT_FALLBACK]));
+    });
+
+    it("natural agent_settled sends failed once", async () => {
+      const { pi, handlers, exec } = createMockPi(true, { "imp-turn-limit": "30" });
+      extensionFactory(pi);
+
+      const inputHandler = handlers.get("input");
+      const settledHandler = handlers.get("agent_settled");
+      if (!inputHandler || !settledHandler) throw new Error("handlers not registered");
+
+      inputHandler({ type: "input", text: workerPrompt("Do the thing."), source: "interactive" }, undefined);
+
+      await settledHandler({}, undefined);
+
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(exec).toHaveBeenCalledWith(
+        "orca",
+        expect.arrayContaining(["--subject", "pi-imps:failed", "--outcome", "failed"]),
+      );
+    });
+
+    it("successful agent_done returns terminate: true, and a subsequent agent_settled sends no duplicate", async () => {
+      const { pi, handlers, registerTool, exec } = createMockPi(true, { "imp-turn-limit": "30" });
+      extensionFactory(pi);
+
+      const inputHandler = handlers.get("input");
+      const settledHandler = handlers.get("agent_settled");
+      if (!inputHandler || !settledHandler) throw new Error("handlers not registered");
+
+      inputHandler({ type: "input", text: workerPrompt("Do the thing."), source: "interactive" }, undefined);
+
+      const tool = registerTool.mock.calls[0][0];
+      const result = await tool.execute("call-1", { outcome: "succeeded", summary: "Done." }, undefined, undefined, {});
+      expect(result.terminate).toBe(true);
+      expect(exec).toHaveBeenCalledTimes(1);
+
+      await settledHandler({}, undefined);
+      expect(exec).toHaveBeenCalledTimes(1);
+    });
+
+    it("a failed agent_done send can retry", async () => {
+      const { pi, handlers, registerTool, exec } = createMockPi(true, { "imp-turn-limit": "30" });
+      extensionFactory(pi);
+      exec
+        .mockResolvedValueOnce({ stdout: "", stderr: "unauthorized", code: 1 })
+        .mockResolvedValueOnce({ stdout: "{}", stderr: "", code: 0 });
+
+      const inputHandler = handlers.get("input");
+      if (!inputHandler) throw new Error("input handler not registered");
+      inputHandler({ type: "input", text: workerPrompt("Do the thing."), source: "interactive" }, undefined);
+
+      const tool = registerTool.mock.calls[0][0];
+      await expect(
+        tool.execute("call-1", { outcome: "failed", summary: "Broke." }, undefined, undefined, {}),
+      ).rejects.toThrow(/rejected/);
+
+      const result = await tool.execute("call-1", { outcome: "failed", summary: "Broke." }, undefined, undefined, {});
+      expect(result.terminate).toBe(true);
+      expect(exec).toHaveBeenCalledTimes(2);
     });
   });
 });

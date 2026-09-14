@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildOrcaSendArgs,
+  buildStatusSubject,
   createAgentDoneTool,
+  createImpLifecycleState,
+  DEFAULT_IMP_TURN_LIMIT,
   extractTaskAfterMarker,
   ORCA_DISPATCHED_WORKER_PREAMBLE,
+  parseImpLifecycleStatus,
+  parseImpTurnLimit,
   parseOrcaWorkerDispatch,
+  reportImpCompletion,
   verifyOrcaWorkerDispatch,
 } from "../src/orca.js";
 
@@ -179,17 +185,15 @@ describe("extractTaskAfterMarker", () => {
 });
 
 describe("buildOrcaSendArgs", () => {
-  it("constructs the exact orca orchestration send argument vector", () => {
-    const args = buildOrcaSendArgs(
-      {
-        workerHandle: "worker-7",
-        taskId: "task_fba7406bf543",
-        dispatchId: "dispatch-456",
-        capability: "cap-secret-xyz",
-      },
-      "succeeded",
-      "Implemented the feature and tests pass.",
-    );
+  const dispatch = {
+    workerHandle: "worker-7",
+    taskId: "task_fba7406bf543",
+    dispatchId: "dispatch-456",
+    capability: "cap-secret-xyz",
+  };
+
+  it("constructs the exact orca orchestration send argument vector for a completed status", () => {
+    const args = buildOrcaSendArgs(dispatch, "completed", "Implemented the feature and tests pass.");
     expect(args).toEqual([
       "orchestration",
       "send",
@@ -200,7 +204,7 @@ describe("buildOrcaSendArgs", () => {
       "--type",
       "worker_done",
       "--subject",
-      "Worker worker-7 succeeded",
+      "pi-imps:completed",
       "--body",
       "Implemented the feature and tests pass.",
       "--task-id",
@@ -212,9 +216,57 @@ describe("buildOrcaSendArgs", () => {
       "--json",
     ]);
   });
+
+  it("maps failed and truncated statuses to the failed Orca outcome", () => {
+    for (const status of ["failed", "truncated"] as const) {
+      const args = buildOrcaSendArgs(dispatch, status, "body");
+      expect(args).toContain("--outcome");
+      expect(args[args.indexOf("--outcome") + 1]).toBe("failed");
+      expect(args[args.indexOf("--subject") + 1]).toBe(`pi-imps:${status}`);
+    }
+  });
 });
 
-describe("agent_done tool", () => {
+describe("stable lifecycle status subject", () => {
+  it("builds exact namespaced subjects with no identifiers or model text", () => {
+    expect(buildStatusSubject("worker-7", "completed")).toBe("pi-imps:completed");
+    expect(buildStatusSubject("worker-7", "failed")).toBe("pi-imps:failed");
+    expect(buildStatusSubject("worker-7", "truncated")).toBe("pi-imps:truncated");
+  });
+
+  it("parses completed, failed, and truncated subjects exactly", () => {
+    expect(parseImpLifecycleStatus(buildStatusSubject("worker-7", "completed"))).toBe("completed");
+    expect(parseImpLifecycleStatus(buildStatusSubject("worker-7", "failed"))).toBe("failed");
+    expect(parseImpLifecycleStatus(buildStatusSubject("worker-7", "truncated"))).toBe("truncated");
+  });
+
+  it("is not influenced by arbitrary model-provided summary text", () => {
+    // The status comes only from buildStatusSubject's fixed vocabulary; a
+    // model-controlled body/summary string can never parse as a status.
+    expect(parseImpLifecycleStatus("pi-imps:completed and also succeeded and failed")).toBeUndefined();
+    expect(parseImpLifecycleStatus("the model claims: pi-imps:completed")).toBeUndefined();
+  });
+});
+
+describe("parseImpTurnLimit", () => {
+  it("defaults to 30 when unset", () => {
+    expect(parseImpTurnLimit(undefined)).toBe(DEFAULT_IMP_TURN_LIMIT);
+    expect(parseImpTurnLimit(undefined)).toBe(30);
+  });
+
+  it("parses a valid whole number >= 2", () => {
+    expect(parseImpTurnLimit("2")).toBe(2);
+    expect(parseImpTurnLimit("45")).toBe(45);
+  });
+
+  it("rejects non-integer, negative, and below-minimum values", () => {
+    for (const bad of ["1", "0", "-5", "abc", "3.5", "", " 5", "5 "]) {
+      expect(() => parseImpTurnLimit(bad)).toThrow(/imp-turn-limit/);
+    }
+  });
+});
+
+describe("reportImpCompletion", () => {
   const dispatch = {
     workerHandle: "worker-7",
     taskId: "task_fba7406bf543",
@@ -222,9 +274,103 @@ describe("agent_done tool", () => {
     capability: "cap-secret-xyz",
   };
 
-  it("invokes pi.exec('orca', args) with exactly the constructed arguments and reports success", async () => {
+  it("sends exactly once and seals completion on success", async () => {
     const exec = vi.fn().mockResolvedValue({ stdout: "{}", stderr: "", code: 0 });
-    const tool = createAgentDoneTool(() => dispatch, exec);
+    const state = createImpLifecycleState();
+
+    await reportImpCompletion(dispatch, state, "completed", "Done.", exec);
+
+    expect(state.completionSealed).toBe(true);
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledWith("orca", buildOrcaSendArgs(dispatch, "completed", "Done."));
+  });
+
+  it("rejects a duplicate call after a successful send, generically", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "{}", stderr: "", code: 0 });
+    const state = createImpLifecycleState();
+
+    await reportImpCompletion(dispatch, state, "completed", "Done.", exec);
+
+    await expect(reportImpCompletion(dispatch, state, "failed", "Again.", exec)).rejects.toThrow(
+      /already been reported/,
+    );
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a concurrent call while a send is in flight, generically", async () => {
+    let resolveExec: (value: { stdout: string; stderr: string; code: number }) => void = () => {};
+    const exec = vi.fn().mockReturnValue(
+      new Promise((resolve) => {
+        resolveExec = resolve;
+      }),
+    );
+    const state = createImpLifecycleState();
+
+    const first = reportImpCompletion(dispatch, state, "completed", "Done.", exec);
+    await expect(reportImpCompletion(dispatch, state, "completed", "Done again.", exec)).rejects.toThrow(
+      /already in progress/,
+    );
+
+    resolveExec({ stdout: "{}", stderr: "", code: 0 });
+    await first;
+    expect(state.completionSealed).toBe(true);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows retry after a failed send; only a successful send seals completion", async () => {
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({ stdout: "", stderr: "unauthorized", code: 1 })
+      .mockResolvedValueOnce({ stdout: "{}", stderr: "", code: 0 });
+    const state = createImpLifecycleState();
+
+    await expect(reportImpCompletion(dispatch, state, "failed", "body", exec)).rejects.toThrow(/rejected/);
+    expect(state.completionSealed).toBe(false);
+
+    await reportImpCompletion(dispatch, state, "failed", "body", exec);
+    expect(state.completionSealed).toBe(true);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("redacts all dispatch identifiers from a thrown-exec failure message", async () => {
+    const exec = vi
+      .fn()
+      .mockRejectedValue(new Error(`worker-7 exploded: task_fba7406bf543 / dispatch-456 / cap-secret-xyz`));
+    const state = createImpLifecycleState();
+
+    await expect(reportImpCompletion(dispatch, state, "failed", "body", exec)).rejects.toThrow(
+      /\[redacted\] exploded: \[redacted\] \/ \[redacted\] \/ \[redacted\]/,
+    );
+    expect(state.completionSealed).toBe(false);
+  });
+
+  it("redacts all dispatch identifiers from a nonzero-exit stderr message", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      stdout: "",
+      stderr: `rejected for worker-7 task_fba7406bf543 dispatch-456 cap-secret-xyz`,
+      code: 1,
+    });
+    const state = createImpLifecycleState();
+
+    await expect(reportImpCompletion(dispatch, state, "failed", "body", exec)).rejects.toThrow(
+      /rejected for \[redacted\] \[redacted\] \[redacted\] \[redacted\]/,
+    );
+    expect(state.completionSealed).toBe(false);
+  });
+
+  it("throws a host-neutral error when no active dispatch is available", async () => {
+    const exec = vi.fn();
+    const state = createImpLifecycleState();
+
+    await expect(reportImpCompletion(undefined, state, "failed", "body", exec)).rejects.toThrow(/No active dispatch/);
+    expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent_done tool", () => {
+  it("invokes the injected report function with outcome/summary and returns terminate: true", async () => {
+    const report = vi.fn().mockResolvedValue(undefined);
+    const tool = createAgentDoneTool(report);
 
     const result = await tool.execute(
       "call-1",
@@ -234,24 +380,17 @@ describe("agent_done tool", () => {
       undefined as never,
     );
 
-    expect(exec).toHaveBeenCalledWith("orca", buildOrcaSendArgs(dispatch, "succeeded", "All good."));
+    expect(report).toHaveBeenCalledWith("succeeded", "All good.");
+    expect(result.terminate).toBe(true);
     expect(result.content[0]).toEqual({ type: "text", text: "Reported succeeded." });
     const text = (result.content[0] as { text: string }).text;
     expect(text).not.toMatch(/orca/i);
     expect(text).not.toMatch(/dispatch/i);
-    expect(text).not.toContain(dispatch.workerHandle);
-    expect(text).not.toContain(dispatch.taskId);
-    expect(text).not.toContain(dispatch.dispatchId);
-    expect(text).not.toContain(dispatch.capability);
   });
 
-  it("throws a non-empty actionable error on nonzero exit without exposing any dispatch identifier", async () => {
-    const exec = vi.fn().mockResolvedValue({
-      stdout: "",
-      stderr: `unauthorized: w=${dispatch.workerHandle} t=${dispatch.taskId} d=${dispatch.dispatchId} c=${dispatch.capability}`,
-      code: 1,
-    });
-    const tool = createAgentDoneTool(() => dispatch, exec);
+  it("propagates a rejected report as a thrown error", async () => {
+    const report = vi.fn().mockRejectedValue(new Error("Failed to report completion: [redacted]"));
+    const tool = createAgentDoneTool(report);
 
     await expect(
       tool.execute(
@@ -262,90 +401,26 @@ describe("agent_done tool", () => {
         undefined as never,
       ),
     ).rejects.toThrow(/\[redacted\]/);
-
-    try {
-      await tool.execute(
-        "call-1",
-        { outcome: "failed", summary: "Could not finish." },
-        undefined,
-        undefined,
-        undefined as never,
-      );
-      throw new Error("expected execute to throw");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      expect(message.length).toBeGreaterThan(0);
-      expect(message).not.toContain(dispatch.workerHandle);
-      expect(message).not.toContain(dispatch.taskId);
-      expect(message).not.toContain(dispatch.dispatchId);
-      expect(message).not.toContain(dispatch.capability);
-      expect(message).not.toMatch(/orca/i);
-      expect(message).not.toMatch(/\bcli\b/i);
-      expect(message).not.toMatch(/terminal handle/i);
-      expect(message).not.toMatch(/task id/i);
-      expect(message).not.toMatch(/dispatch id/i);
-      expect(message).not.toMatch(/capability/i);
-    }
   });
 
-  it("throws a non-empty actionable error when exec throws, without exposing any dispatch identifier", async () => {
-    const exec = vi
+  it("propagates a host-neutral no-active-dispatch error from the report function", async () => {
+    const report = vi
       .fn()
-      .mockRejectedValue(
-        new Error(
-          `network error: w=${dispatch.workerHandle} t=${dispatch.taskId} d=${dispatch.dispatchId} c=${dispatch.capability}`,
-        ),
-      );
-    const tool = createAgentDoneTool(() => dispatch, exec);
+      .mockRejectedValue(new Error("No active dispatch for this session; cannot report completion."));
+    const tool = createAgentDoneTool(report);
 
-    try {
-      await tool.execute(
-        "call-1",
-        { outcome: "failed", summary: "Could not finish." },
-        undefined,
-        undefined,
-        undefined as never,
-      );
-      throw new Error("expected execute to throw");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      expect(message.length).toBeGreaterThan(0);
-      expect(message).not.toContain(dispatch.workerHandle);
-      expect(message).not.toContain(dispatch.taskId);
-      expect(message).not.toContain(dispatch.dispatchId);
-      expect(message).not.toContain(dispatch.capability);
-      expect(message).not.toMatch(/orca/i);
-      expect(message).not.toMatch(/\bcli\b/i);
-      expect(message).not.toMatch(/terminal handle/i);
-      expect(message).not.toMatch(/task id/i);
-      expect(message).not.toMatch(/dispatch id/i);
-      expect(message).not.toMatch(/capability/i);
-    }
+    await expect(
+      tool.execute("call-1", { outcome: "succeeded", summary: "Done." }, undefined, undefined, undefined as never),
+    ).rejects.toThrow(/No active dispatch/);
   });
 
-  it("throws a host-neutral error when no active dispatch is available", async () => {
-    const exec = vi.fn();
-    const tool = createAgentDoneTool(() => undefined, exec);
-
-    try {
-      await tool.execute(
-        "call-1",
-        { outcome: "succeeded", summary: "Done." },
-        undefined,
-        undefined,
-        undefined as never,
-      );
-      throw new Error("expected execute to throw");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      expect(message).toMatch(/No active dispatch/);
-      expect(message).not.toMatch(/orca/i);
-      expect(message).not.toMatch(/\bcli\b/i);
-      expect(message).not.toMatch(/terminal handle/i);
-      expect(message).not.toMatch(/task id/i);
-      expect(message).not.toMatch(/dispatch id/i);
-      expect(message).not.toMatch(/capability/i);
-    }
-    expect(exec).not.toHaveBeenCalled();
+  it("guidance is generic and never mentions Orca, dispatch ids, capability, or CLI", () => {
+    const tool = createAgentDoneTool(vi.fn());
+    const guidanceText = [tool.description, tool.promptSnippet, ...(tool.promptGuidelines ?? [])].join(" ");
+    expect(guidanceText.toLowerCase()).not.toContain("orca");
+    expect(guidanceText.toLowerCase()).not.toContain("dispatch");
+    expect(guidanceText.toLowerCase()).not.toContain("capability");
+    expect(guidanceText.toLowerCase()).not.toContain("cli");
+    expect(guidanceText).toMatch(/exactly once/);
   });
 });

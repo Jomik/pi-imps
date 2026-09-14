@@ -53,7 +53,7 @@ export function getBackingModelRuntime(modelRegistry: ModelRegistry): ModelRunti
   return runtime;
 }
 
-const FINAL_TURN_DIRECTIVE =
+export const FINAL_TURN_DIRECTIVE =
   "FINAL TURN. Do not start new work. Save any pending changes, commit your progress, and respond with: (1) what you completed, (2) what remains unfinished.";
 
 /**

@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type AgentDiagnostic, buildAgentsBlock, discoverAgents } from "./agents.js";
 import { createImpsCommand } from "./command.js";
 import { createNamePool } from "./names.js";
-import { initOrcaWorker } from "./orca.js";
+import { initOrcaWorker, parseImpTurnLimit } from "./orca.js";
 import { loadImpSettings } from "./settings.js";
 import { runningImps } from "./state.js";
 import { dismissAllImps, dismissTool, listImpsTool, summonTool, waitTool } from "./tools.js";
@@ -15,8 +15,17 @@ export default function (pi: ExtensionAPI): void {
     default: false,
   });
 
+  // Registered unconditionally so the flag exists in both modes; only worker
+  // mode reads and validates it (parent mode never uses it).
+  pi.registerFlag("imp-turn-limit", {
+    description: "Turn limit enforced by Orca-dispatched imp worker mode (only used with --is-imp)",
+    type: "string",
+    default: "30",
+  });
+
   if (pi.getFlag("is-imp")) {
-    initOrcaWorker(pi);
+    const turnLimit = parseImpTurnLimit(pi.getFlag("imp-turn-limit") as string | undefined);
+    initOrcaWorker(pi, turnLimit);
     return;
   }
 
