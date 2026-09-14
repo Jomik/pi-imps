@@ -10,11 +10,19 @@ import type { AgentConfig, ImpSettings } from "../src/types.js";
 
 // ─── deterministic fake `orca` CLI ─────────────────────────────────────────
 //
-// Models exactly the envelope shapes the coordinator relies on:
-// - orchestration run-create / task-create / worker-start
-// - terminal create / wait-tui-idle / close
-// - orchestration worker-stop / worker-release
-// - orchestration check --wait --types worker_done / check --ack
+// Models the exact real Orca envelope shapes the coordinator relies on.
+// The whole stdout envelope is always `{ ok: true, result: {...} }`:
+//
+// - orchestration run-create      -> result.run.id
+// - terminal create               -> result.terminal.handle
+// - terminal wait --for tui-idle  -> result.wait.satisfied / result.wait.status
+// - orchestration task-create     -> result.task.id (args: --task-title)
+// - orchestration worker-start    -> result.dispatchId, result.state === "ready", result.stage
+//   (no worker object/id/handle at all; the worker handle IS the pre-created
+//   terminal handle)
+// - orchestration worker-stop/worker-release -> keyed by --dispatch <dispatchId>
+// - orchestration check (--wait / --ack)      -> result.deliveryId, result.messages
+//   directly, always with an explicit --run <runId>
 //
 // Deliveries are injected via `pushDelivery`; `check --wait` pops the next
 // queued delivery (or an empty one, simulating a timeout/no-message poll).
@@ -23,20 +31,24 @@ import type { AgentConfig, ImpSettings } from "../src/types.js";
 
 interface Envelope {
   ok: boolean;
-  [k: string]: unknown;
+  result?: Record<string, unknown>;
 }
 
 interface DeliveryMessage {
-  payload: string | { dispatchId: string; taskId: string; from: string; subject: string; body: string };
+  type: string;
+  from_handle: string;
+  subject: string;
+  body: string;
+  payload: string | { dispatchId: string; taskId: string; outcome: "succeeded" | "failed" };
 }
 
 interface Delivery {
-  id: string;
+  deliveryId: string;
   messages: DeliveryMessage[];
 }
 
-function ok(body: Record<string, unknown> = {}): Envelope {
-  return { ok: true, ...body };
+function ok(result: Record<string, unknown> = {}): Envelope {
+  return { ok: true, result };
 }
 
 /** Resolves after `ms`, rejecting immediately if `signal` is (or becomes) aborted — models a real long-poll network call. */
@@ -58,13 +70,12 @@ class FakeOrcaCli {
   runSeq = 0;
   terminalSeq = 0;
   taskSeq = 0;
-  workerSeq = 0;
   dispatchSeq = 0;
 
   runId: string | undefined;
   closedTerminals: string[] = [];
-  stoppedWorkers: string[] = [];
-  releasedWorkers: string[] = [];
+  stoppedDispatches: string[] = [];
+  releasedDispatches: string[] = [];
 
   private deliveryQueue: Delivery[] = [];
   private ackChain = new Map<string, Delivery>();
@@ -106,12 +117,13 @@ class FakeOrcaCli {
     }
 
     if (group === "terminal" && action === "create") {
-      const id = `term_${++this.terminalSeq}`;
-      return { stdout: JSON.stringify(ok({ terminal: { id } })), stderr: "", code: 0 };
+      const handle = `handle_${++this.terminalSeq}`;
+      return { stdout: JSON.stringify(ok({ terminal: { handle } })), stderr: "", code: 0 };
     }
 
-    if (group === "terminal" && action === "wait-tui-idle") {
-      return { stdout: JSON.stringify(ok({ state: "idle" })), stderr: "", code: 0 };
+    if (group === "terminal" && action === "wait") {
+      expect(args).toEqual(expect.arrayContaining(["--for", "tui-idle", "--timeout-ms", "60000"]));
+      return { stdout: JSON.stringify(ok({ wait: { satisfied: true, status: "idle" } })), stderr: "", code: 0 };
     }
 
     if (group === "terminal" && action === "close") {
@@ -121,33 +133,36 @@ class FakeOrcaCli {
     }
 
     if (group === "orchestration" && action === "task-create") {
+      expect(args).toContain("--task-title");
       const id = `task_${++this.taskSeq}`;
       return { stdout: JSON.stringify(ok({ task: { id } })), stderr: "", code: 0 };
     }
 
     if (group === "orchestration" && action === "worker-start") {
-      const workerId = `worker_${++this.workerSeq}`;
       const dispatchId = `dispatch_${++this.dispatchSeq}`;
       return {
-        stdout: JSON.stringify(ok({ worker: { id: workerId, handle: `handle_${workerId}` }, dispatchId })),
+        stdout: JSON.stringify(ok({ dispatchId, state: "ready", stage: "running" })),
         stderr: "",
         code: 0,
       };
     }
 
     if (group === "orchestration" && action === "worker-stop") {
-      const idx = args.indexOf("--worker");
-      this.stoppedWorkers.push(args[idx + 1]);
+      expect(args).not.toContain("--worker");
+      const idx = args.indexOf("--dispatch");
+      this.stoppedDispatches.push(args[idx + 1]);
       return { stdout: JSON.stringify(ok()), stderr: "", code: 0 };
     }
 
     if (group === "orchestration" && action === "worker-release") {
-      const idx = args.indexOf("--worker");
-      this.releasedWorkers.push(args[idx + 1]);
+      expect(args).not.toContain("--worker");
+      const idx = args.indexOf("--dispatch");
+      this.releasedDispatches.push(args[idx + 1]);
       return { stdout: JSON.stringify(ok()), stderr: "", code: 0 };
     }
 
     if (group === "orchestration" && action === "check") {
+      expect(args).toContain("--run");
       if (args.includes("--ack")) {
         const idx = args.indexOf("--ack");
         const deliveryId = args[idx + 1];
@@ -155,7 +170,7 @@ class FakeOrcaCli {
           return { stdout: "", stderr: "ack exploded", code: 1 };
         }
         const chained = this.ackChain.get(deliveryId);
-        return { stdout: JSON.stringify(ok(chained ? { delivery: chained } : {})), stderr: "", code: 0 };
+        return { stdout: JSON.stringify(ok(chained ? { ...chained } : {})), stderr: "", code: 0 };
       }
       // Models a real `--wait` long poll: always yields to a macrotask (and
       // observes abort promptly) instead of resolving in a tight microtask
@@ -165,7 +180,7 @@ class FakeOrcaCli {
         return { stdout: "", stderr: this.failCheck.message, code: 1 };
       }
       const next = this.deliveryQueue.shift();
-      return { stdout: JSON.stringify(ok(next ? { delivery: next } : {})), stderr: "", code: 0 };
+      return { stdout: JSON.stringify(ok(next ? { ...next } : {})), stderr: "", code: 0 };
     }
 
     throw new Error(`unexpected fake orca command: ${args.join(" ")}`);
@@ -179,10 +194,18 @@ function payloadMessage(
     from: string;
     subject: string;
     body: string;
+    outcome: "succeeded" | "failed";
   },
   asString = false,
-) {
-  return { payload: asString ? JSON.stringify(fields) : fields };
+): DeliveryMessage {
+  const payloadFields = { dispatchId: fields.dispatchId, taskId: fields.taskId, outcome: fields.outcome };
+  return {
+    type: "worker_done",
+    from_handle: fields.from,
+    subject: fields.subject,
+    body: fields.body,
+    payload: asString ? JSON.stringify(payloadFields) : payloadFields,
+  };
 }
 
 function makeModel(): Model<Api> {
@@ -294,6 +317,56 @@ describe("OrcaCoordinator.spawn", () => {
     expect(execSpy.mock.calls.some((c) => c[1][0] === "worktree" && c[1][1] === "create")).toBe(false);
   });
 
+  it("uses the exact terminal wait / task-create / worker-start commands", async () => {
+    const cli = new FakeOrcaCli();
+    const coordinator = makeCoordinator(cli);
+    const execSpy = vi.spyOn(cli, "exec");
+
+    await coordinator.spawn(baseSpawnOpts({ name: "imp-a" }));
+
+    const waitCall = execSpy.mock.calls.find((c) => c[1][0] === "terminal" && c[1][1] === "wait");
+    expect(waitCall?.[1]).toEqual(
+      expect.arrayContaining(["--terminal", "handle_1", "--for", "tui-idle", "--timeout-ms", "60000"]),
+    );
+
+    const taskCall = execSpy.mock.calls.find((c) => c[1][0] === "orchestration" && c[1][1] === "task-create");
+    expect(taskCall?.[1]).toEqual(expect.arrayContaining(["--task-title", "imp-a"]));
+
+    const workerCall = execSpy.mock.calls.find((c) => c[1][0] === "orchestration" && c[1][1] === "worker-start");
+    expect(workerCall?.[1]).toEqual(expect.arrayContaining(["--terminal", "handle_1"]));
+    expect(workerCall?.[1]).not.toContain("--worker");
+  });
+
+  it("rejects when terminal wait reports satisfied: false", async () => {
+    const cli = new FakeOrcaCli();
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      if (args[0] === "terminal" && args[1] === "wait") {
+        return { stdout: JSON.stringify(ok({ wait: { satisfied: false, status: "timed-out" } })), stderr: "", code: 0 };
+      }
+      return originalExec(command, args, options);
+    };
+    const coordinator = makeCoordinator(cli);
+
+    await expect(coordinator.spawn(baseSpawnOpts())).rejects.toThrow(/satisfied/);
+    expect(cli.closedTerminals).toHaveLength(1);
+  });
+
+  it("rejects when worker-start reports a non-ready state", async () => {
+    const cli = new FakeOrcaCli();
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      if (args[0] === "orchestration" && args[1] === "worker-start") {
+        return { stdout: JSON.stringify(ok({ dispatchId: "dispatch_x", state: "pending" })), stderr: "", code: 0 };
+      }
+      return originalExec(command, args, options);
+    };
+    const coordinator = makeCoordinator(cli);
+
+    await expect(coordinator.spawn(baseSpawnOpts())).rejects.toThrow(/ready state/);
+    expect(cli.closedTerminals).toHaveLength(1);
+  });
+
   it("rejects and closes the created terminal when worker-start fails", async () => {
     const cli = new FakeOrcaCli();
     const originalExec = cli.exec;
@@ -307,6 +380,25 @@ describe("OrcaCoordinator.spawn", () => {
 
     await expect(coordinator.spawn(baseSpawnOpts())).rejects.toThrow(/worker-start exploded/);
     expect(cli.closedTerminals).toHaveLength(1);
+  });
+
+  it("bounds a very long failure message to 500 characters", async () => {
+    const cli = new FakeOrcaCli();
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      if (args[0] === "orchestration" && args[1] === "worker-start") {
+        return { stdout: "", stderr: "x".repeat(2000), code: 1 };
+      }
+      return originalExec(command, args, options);
+    };
+    const coordinator = makeCoordinator(cli);
+
+    await expect(coordinator.spawn(baseSpawnOpts())).rejects.toThrow(/x{100,}/);
+    try {
+      await coordinator.spawn(baseSpawnOpts());
+    } catch (err) {
+      expect((err as Error).message.length).toBeLessThanOrEqual(501);
+    }
   });
 
   it("cancels command operations and closes the created terminal on abort during a partial spawn", async () => {
@@ -339,34 +431,37 @@ describe("OrcaCoordinator mailbox routing", () => {
     await coordinator.spawn(baseSpawnOpts({ name: "imp-b", onComplete: onCompleteB }));
     await coordinator.spawn(baseSpawnOpts({ name: "imp-c", onComplete: onCompleteC }));
 
-    // dispatch_1 -> imp-a, dispatch_2 -> imp-b, dispatch_3 -> imp-c
+    // dispatch_1 -> imp-a (handle_1), dispatch_2 -> imp-b (handle_2), dispatch_3 -> imp-c (handle_3)
     // Deliver out of order: c (truncated), a (completed), b (failed).
     cli.pushDelivery({
-      id: "delivery-1",
+      deliveryId: "delivery-1",
       messages: [
         payloadMessage({
           dispatchId: "dispatch_3",
           taskId: "task_3",
-          from: "handle_worker_3",
+          from: "handle_3",
           subject: "pi-imps:truncated",
           body: "partial work",
+          outcome: "failed",
         }),
         payloadMessage(
           {
             dispatchId: "dispatch_1",
             taskId: "task_1",
-            from: "handle_worker_1",
+            from: "handle_1",
             subject: "pi-imps:completed",
             body: "all done",
+            outcome: "succeeded",
           },
           true,
         ),
         payloadMessage({
           dispatchId: "dispatch_2",
           taskId: "task_2",
-          from: "handle_worker_2",
+          from: "handle_2",
           subject: "pi-imps:failed",
           body: "blew up",
+          outcome: "failed",
         }),
       ],
     });
@@ -391,14 +486,15 @@ describe("OrcaCoordinator mailbox routing", () => {
     await coordinator.spawn(baseSpawnOpts({ onComplete }));
 
     cli.pushDelivery({
-      id: "delivery-1",
+      deliveryId: "delivery-1",
       messages: [
         payloadMessage({
           dispatchId: "dispatch_1",
           taskId: "task_1",
-          from: "handle_worker_1",
+          from: "handle_1",
           subject: "pi-imps:failed",
           body: "",
+          outcome: "failed",
         }),
       ],
     });
@@ -413,29 +509,40 @@ describe("OrcaCoordinator mailbox routing", () => {
     );
   });
 
-  it("ignores an unknown dispatch id, a mismatched task/from, and an invalid subject, but always acks", async () => {
+  it("ignores an unknown dispatch id, mismatched task/from, invalid subject, wrong outcome, and non-worker_done type, but always acks", async () => {
     const cli = new FakeOrcaCli();
     const coordinator = makeCoordinator(cli);
     const onComplete = vi.fn();
 
     await coordinator.spawn(baseSpawnOpts({ onComplete }));
 
+    const wrongTypeMessage = payloadMessage({
+      dispatchId: "dispatch_1",
+      taskId: "task_1",
+      from: "handle_1",
+      subject: "pi-imps:completed",
+      body: "x",
+      outcome: "succeeded",
+    });
+
     cli.pushDelivery({
-      id: "delivery-1",
+      deliveryId: "delivery-1",
       messages: [
         payloadMessage({
           dispatchId: "dispatch_unknown",
           taskId: "task_1",
-          from: "handle_worker_1",
+          from: "handle_1",
           subject: "pi-imps:completed",
           body: "x",
+          outcome: "succeeded",
         }),
         payloadMessage({
           dispatchId: "dispatch_1",
           taskId: "wrong-task",
-          from: "handle_worker_1",
+          from: "handle_1",
           subject: "pi-imps:completed",
           body: "x",
+          outcome: "succeeded",
         }),
         payloadMessage({
           dispatchId: "dispatch_1",
@@ -443,14 +550,25 @@ describe("OrcaCoordinator mailbox routing", () => {
           from: "someone-else",
           subject: "pi-imps:completed",
           body: "x",
+          outcome: "succeeded",
         }),
         payloadMessage({
           dispatchId: "dispatch_1",
           taskId: "task_1",
-          from: "handle_worker_1",
+          from: "handle_1",
           subject: "not-a-real-subject",
           body: "x",
+          outcome: "succeeded",
         }),
+        payloadMessage({
+          dispatchId: "dispatch_1",
+          taskId: "task_1",
+          from: "handle_1",
+          subject: "pi-imps:completed",
+          body: "x",
+          outcome: "failed", // mismatched outcome for a `completed` subject
+        }),
+        { ...wrongTypeMessage, type: "some_other_type" },
       ],
     });
 
@@ -473,7 +591,7 @@ describe("OrcaCoordinator mailbox routing", () => {
     await coordinator.spawn(baseSpawnOpts({ onComplete }));
 
     cli.pushDelivery({
-      id: "delivery-1",
+      deliveryId: "delivery-1",
       messages: [
         payloadMessage({
           dispatchId: "dispatch_missing", // ignored: keeps this delivery's onComplete count at zero
@@ -481,18 +599,20 @@ describe("OrcaCoordinator mailbox routing", () => {
           from: "handle_x",
           subject: "pi-imps:completed",
           body: "irrelevant",
+          outcome: "succeeded",
         }),
       ],
     });
     cli.chainAckDelivery("delivery-1", {
-      id: "delivery-2",
+      deliveryId: "delivery-2",
       messages: [
         payloadMessage({
           dispatchId: "dispatch_1",
           taskId: "task_1",
-          from: "handle_worker_1",
+          from: "handle_1",
           subject: "pi-imps:completed",
           body: "final",
+          outcome: "succeeded",
         }),
       ],
     });
@@ -505,6 +625,9 @@ describe("OrcaCoordinator mailbox routing", () => {
 
     expect(onComplete).toHaveBeenCalledWith({ output: "final" });
     expect(execSpy.mock.calls.filter((c) => c[1].includes("--ack"))).toHaveLength(2);
+    for (const call of execSpy.mock.calls.filter((c) => c[1].includes("--ack"))) {
+      expect(call[1]).toContain("--run");
+    }
   });
 
   it("never runs two concurrent mailbox check consumers", async () => {
@@ -530,8 +653,8 @@ describe("OrcaCoordinator mailbox routing", () => {
       coordinator.spawn(baseSpawnOpts({ name: "imp-b" })),
     ]);
 
-    cli.pushDelivery({ id: "d1", messages: [] });
-    cli.pushDelivery({ id: "d2", messages: [] });
+    cli.pushDelivery({ deliveryId: "d1", messages: [] });
+    cli.pushDelivery({ deliveryId: "d2", messages: [] });
 
     await coordinator.shutdown();
 
@@ -540,7 +663,7 @@ describe("OrcaCoordinator mailbox routing", () => {
 });
 
 describe("OrcaCoordinator abort / shutdown / fatal mailbox", () => {
-  it("abort is idempotent, does not call onComplete, and always closes the externally-created terminal", async () => {
+  it("abort is idempotent, does not call onComplete, and always closes the externally-created terminal by dispatch", async () => {
     const cli = new FakeOrcaCli();
     const coordinator = makeCoordinator(cli);
     const onComplete = vi.fn();
@@ -551,11 +674,11 @@ describe("OrcaCoordinator abort / shutdown / fatal mailbox", () => {
 
     expect(onComplete).not.toHaveBeenCalled();
     expect(cli.closedTerminals).toHaveLength(1);
-    expect(cli.stoppedWorkers).toHaveLength(1);
-    expect(cli.releasedWorkers).toHaveLength(1);
+    expect(cli.stoppedDispatches).toEqual(["dispatch_1"]);
+    expect(cli.releasedDispatches).toEqual(["dispatch_1"]);
   });
 
-  it("a fatal mailbox error fails every active imp exactly once with a non-empty error, closing terminals", async () => {
+  it("a fatal mailbox error fails every active imp exactly once with a non-empty bounded error, closing terminals", async () => {
     const cli = new FakeOrcaCli();
     const coordinator = makeCoordinator(cli);
     const onCompleteA = vi.fn();
@@ -572,6 +695,7 @@ describe("OrcaCoordinator abort / shutdown / fatal mailbox", () => {
 
     expect(onCompleteA).toHaveBeenCalledTimes(1);
     expect(onCompleteA.mock.calls[0][0].error).toEqual(expect.stringMatching(/.+/));
+    expect(onCompleteA.mock.calls[0][0].error.length).toBeLessThanOrEqual(500);
     expect(onCompleteB).toHaveBeenCalledTimes(1);
     expect(cli.closedTerminals).toHaveLength(2);
 
@@ -590,5 +714,56 @@ describe("OrcaCoordinator abort / shutdown / fatal mailbox", () => {
     expect(cli.closedTerminals).toHaveLength(1);
 
     await expect(coordinator.spawn(baseSpawnOpts())).rejects.toThrow(/shutting down/);
+  });
+
+  it("restarts the mailbox consumer if a new active record is registered right as the loop finalizes", async () => {
+    const cli = new FakeOrcaCli();
+    const coordinator = makeCoordinator(cli);
+
+    const onCompleteA = vi.fn();
+    await coordinator.spawn(baseSpawnOpts({ name: "imp-a", onComplete: onCompleteA }));
+
+    // Complete imp-a immediately so the mailbox loop's `active.size > 0`
+    // condition can become false right after this delivery drains.
+    cli.pushDelivery({
+      deliveryId: "delivery-1",
+      messages: [
+        payloadMessage({
+          dispatchId: "dispatch_1",
+          taskId: "task_1",
+          from: "handle_1",
+          subject: "pi-imps:completed",
+          body: "done",
+          outcome: "succeeded",
+        }),
+      ],
+    });
+
+    await vi.waitFor(() => expect(onCompleteA).toHaveBeenCalled());
+
+    // Spawn a second imp right away; the mailbox loop may or may not have
+    // finalized yet, but the coordinator must guarantee it ends up watching
+    // this new dispatch either way.
+    const onCompleteB = vi.fn();
+    await coordinator.spawn(baseSpawnOpts({ name: "imp-b", onComplete: onCompleteB }));
+
+    cli.pushDelivery({
+      deliveryId: "delivery-2",
+      messages: [
+        payloadMessage({
+          dispatchId: "dispatch_2",
+          taskId: "task_2",
+          from: "handle_2",
+          subject: "pi-imps:completed",
+          body: "also done",
+          outcome: "succeeded",
+        }),
+      ],
+    });
+
+    await vi.waitFor(() => expect(onCompleteB).toHaveBeenCalled());
+    await coordinator.shutdown();
+
+    expect(onCompleteB).toHaveBeenCalledWith({ output: "also done" });
   });
 });

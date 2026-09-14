@@ -44,47 +44,56 @@ export interface OrcaSpawnHandle {
   abort(): Promise<void>;
 }
 
-interface OrcaEnvelope {
-  ok: unknown;
-  [key: string]: unknown;
+/** Maximum length of any actionable error text surfaced by the coordinator. */
+const MAX_ERROR_LENGTH = 500;
+
+/** Bound actionable error text to a fixed length. Never includes command args, task text, or system prompt. */
+function boundedError(message: string): string {
+  const trimmed = message.trim();
+  if (trimmed.length <= MAX_ERROR_LENGTH) return trimmed;
+  return `${trimmed.slice(0, MAX_ERROR_LENGTH)}\u2026`;
 }
 
-interface RunCreateResponse extends OrcaEnvelope {
+interface RunCreateResult {
   run?: { id?: unknown };
 }
 
-interface TerminalCreateResponse extends OrcaEnvelope {
-  terminal?: { id?: unknown };
+interface TerminalCreateResult {
+  terminal?: { handle?: unknown };
 }
 
-interface WaitIdleResponse extends OrcaEnvelope {
-  state?: unknown;
+interface TerminalWaitResult {
+  wait?: { satisfied?: unknown; status?: unknown };
 }
 
-interface TaskCreateResponse extends OrcaEnvelope {
+interface TaskCreateResult {
   task?: { id?: unknown };
 }
 
-interface WorkerStartResponse extends OrcaEnvelope {
-  worker?: { id?: unknown; handle?: unknown };
+interface WorkerStartResult {
   dispatchId?: unknown;
+  state?: unknown;
+  stage?: unknown;
 }
 
-interface RawDeliveryMessage {
+interface RawMailboxMessage {
+  type?: unknown;
+  from_handle?: unknown;
+  subject?: unknown;
+  body?: unknown;
   payload?: unknown;
 }
 
-interface CheckResponse extends OrcaEnvelope {
-  delivery?: { id?: unknown; messages?: RawDeliveryMessage[] };
+interface CheckResult {
+  deliveryId?: unknown;
+  messages?: RawMailboxMessage[];
 }
 
 interface ActiveRecord {
   readonly dispatchId: string;
   readonly runId: string;
   readonly taskId: string;
-  readonly terminalId: string;
-  readonly workerId: string;
-  readonly workerHandle: string;
+  readonly terminalHandle: string;
   readonly onComplete: (result: OrcaSpawnResult) => void;
   /** True once completion or abort has been finalized; guards exactly-once settlement. */
   settled: boolean;
@@ -93,53 +102,65 @@ interface ActiveRecord {
 interface ParsedMailboxPayload {
   dispatchId: string;
   taskId: string;
-  from: string;
-  subject: string;
-  body: string;
+  outcome: "succeeded" | "failed";
 }
 
-/** Run one `orca <args>` call, requiring exit 0, parseable JSON, and `ok: true`. Never includes `args` in thrown text. */
-async function execOrca<T extends OrcaEnvelope>(
-  exec: OrcaExecFn,
-  args: string[],
-  label: string,
-  signal?: AbortSignal,
-): Promise<T> {
+/**
+ * Run one `orca <args>` call, requiring exit 0, parseable JSON, `ok: true`,
+ * and a `result` object — the real Orca envelope shape is
+ * `{ ok: true, result: {...} }`. Returns the unwrapped `result` payload.
+ * Never includes `args` in thrown text.
+ */
+async function execOrca<R>(exec: OrcaExecFn, args: string[], label: string, signal?: AbortSignal): Promise<R> {
   let result: { stdout: string; stderr: string; code: number };
   try {
     result = await exec("orca", args, signal ? { signal } : undefined);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Orca ${label} failed to run: ${message || "unknown error"}`);
+    throw new Error(boundedError(`Orca ${label} failed to run: ${message || "unknown error"}`));
   }
 
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout || "no output").trim();
-    throw new Error(`Orca ${label} failed (exit ${result.code}): ${detail || "no output"}`);
+    throw new Error(boundedError(`Orca ${label} failed (exit ${result.code}): ${detail || "no output"}`));
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.stdout);
   } catch {
-    throw new Error(`Orca ${label} returned malformed JSON: ${(result.stdout || "").trim() || "(empty output)"}`);
+    throw new Error(
+      boundedError(`Orca ${label} returned malformed JSON: ${(result.stdout || "").trim() || "(empty output)"}`),
+    );
   }
 
-  if (!parsed || typeof parsed !== "object" || (parsed as OrcaEnvelope).ok !== true) {
-    throw new Error(`Orca ${label} reported a non-ok status: ${(result.stdout || "").trim() || "(empty output)"}`);
+  if (!parsed || typeof parsed !== "object" || (parsed as { ok?: unknown }).ok !== true) {
+    throw new Error(
+      boundedError(`Orca ${label} reported a non-ok status: ${(result.stdout || "").trim() || "(empty output)"}`),
+    );
   }
 
-  return parsed as T;
+  const envelopeResult = (parsed as { result?: unknown }).result;
+  if (!envelopeResult || typeof envelopeResult !== "object") {
+    throw new Error(boundedError(`Orca ${label} reported no result payload.`));
+  }
+
+  return envelopeResult as R;
 }
 
 function requireNonEmptyString(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Orca ${label} reported no usable id/state.`);
+    throw new Error(boundedError(`Orca ${label} reported no usable id.`));
   }
   return value;
 }
 
-/** Parse a `worker_done` message payload, which may arrive as a JSON string or already-decoded object. */
+/**
+ * Parse a `worker_done` message payload. Per the real Orca protocol the
+ * payload only ever carries `taskId`, `dispatchId`, and `outcome`; every
+ * other field (`type`, `from_handle`, `subject`, `body`) lives at the
+ * message level, not inside the payload.
+ */
 function parseMailboxPayload(payload: unknown): ParsedMailboxPayload | undefined {
   let value: unknown = payload;
   if (typeof value === "string") {
@@ -152,14 +173,12 @@ function parseMailboxPayload(payload: unknown): ParsedMailboxPayload | undefined
   if (!value || typeof value !== "object") return undefined;
 
   const obj = value as Record<string, unknown>;
-  const { dispatchId, taskId, from, subject, body } = obj;
+  const { dispatchId, taskId, outcome } = obj;
   if (typeof dispatchId !== "string" || !dispatchId) return undefined;
   if (typeof taskId !== "string" || !taskId) return undefined;
-  if (typeof from !== "string" || !from) return undefined;
-  if (typeof subject !== "string") return undefined;
-  if (typeof body !== "string") return undefined;
+  if (outcome !== "succeeded" && outcome !== "failed") return undefined;
 
-  return { dispatchId, taskId, from, subject, body };
+  return { dispatchId, taskId, outcome };
 }
 
 export class OrcaCoordinator {
@@ -179,7 +198,8 @@ export class OrcaCoordinator {
    * Spawn one Orca-dispatched imp: shares the coordinator's single lazily
    * created orchestration run, and creates its own task/terminal/dispatch.
    * Resolves with an abort handle only once the dispatch is fully ready
-   * (worker-start has succeeded and the active record is registered).
+   * (worker-start reports `state: "ready"` and the active record is
+   * registered).
    */
   async spawn(opts: OrcaSpawnOptions): Promise<OrcaSpawnHandle> {
     if (this.shuttingDown) {
@@ -196,53 +216,56 @@ export class OrcaCoordinator {
       exec: this.exec,
     });
 
-    let terminalId: string | undefined;
+    let terminalHandle: string | undefined;
     try {
       const run = await this.ensureRun();
 
-      const terminalResp = await execOrca<TerminalCreateResponse>(
+      const terminalResult = await execOrca<TerminalCreateResult>(
         this.exec,
         ["terminal", "create", "--worktree", "current", "--title", opts.name, "--command", plan.command, "--json"],
         "terminal create",
         opts.signal,
       );
-      terminalId = requireNonEmptyString(terminalResp.terminal?.id, "terminal create");
+      terminalHandle = requireNonEmptyString(terminalResult.terminal?.handle, "terminal create");
 
-      const idleResp = await execOrca<WaitIdleResponse>(
+      const waitResult = await execOrca<TerminalWaitResult>(
         this.exec,
-        ["terminal", "wait-tui-idle", "--terminal", terminalId, "--timeout-ms", "60000", "--json"],
-        "terminal wait-tui-idle",
+        ["terminal", "wait", "--terminal", terminalHandle, "--for", "tui-idle", "--timeout-ms", "60000", "--json"],
+        "terminal wait",
         opts.signal,
       );
-      if (idleResp.state !== undefined && idleResp.state !== "idle") {
-        throw new Error(`Orca terminal wait-tui-idle reported unexpected state: ${String(idleResp.state)}`);
+      if (waitResult.wait?.satisfied !== true) {
+        throw new Error(
+          boundedError(`Orca terminal wait did not become satisfied (status: ${String(waitResult.wait?.status)})`),
+        );
       }
 
-      const taskResp = await execOrca<TaskCreateResponse>(
+      const taskResult = await execOrca<TaskCreateResult>(
         this.exec,
-        ["orchestration", "task-create", "--run", run.id, "--title", opts.name, "--spec", opts.task, "--json"],
+        ["orchestration", "task-create", "--run", run.id, "--task-title", opts.name, "--spec", opts.task, "--json"],
         "task create",
         opts.signal,
       );
-      const taskId = requireNonEmptyString(taskResp.task?.id, "task create");
+      const taskId = requireNonEmptyString(taskResult.task?.id, "task create");
 
-      const workerResp = await execOrca<WorkerStartResponse>(
+      const workerResult = await execOrca<WorkerStartResult>(
         this.exec,
-        ["orchestration", "worker-start", "--run", run.id, "--task", taskId, "--terminal", terminalId, "--json"],
+        ["orchestration", "worker-start", "--run", run.id, "--task", taskId, "--terminal", terminalHandle, "--json"],
         "worker start",
         opts.signal,
       );
-      const workerId = requireNonEmptyString(workerResp.worker?.id, "worker start");
-      const workerHandle = requireNonEmptyString(workerResp.worker?.handle, "worker start");
-      const dispatchId = requireNonEmptyString(workerResp.dispatchId, "worker start");
+      if (workerResult.state !== "ready") {
+        throw new Error(
+          boundedError(`Orca worker start did not reach ready state (state: ${String(workerResult.state)})`),
+        );
+      }
+      const dispatchId = requireNonEmptyString(workerResult.dispatchId, "worker start");
 
       const record: ActiveRecord = {
         dispatchId,
         runId: run.id,
         taskId,
-        terminalId,
-        workerId,
-        workerHandle,
+        terminalHandle,
         onComplete: opts.onComplete,
         settled: false,
       };
@@ -252,11 +275,11 @@ export class OrcaCoordinator {
 
       return { abort: () => this.abortDispatch(record) };
     } catch (err) {
-      if (terminalId) {
-        await this.safeExec(["terminal", "close", "--terminal", terminalId, "--json"], "terminal close (cleanup)");
+      if (terminalHandle) {
+        await this.safeExec(["terminal", "close", "--terminal", terminalHandle, "--json"], "terminal close (cleanup)");
       }
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(message || "Failed to spawn Orca-dispatched imp");
+      throw new Error(boundedError(message || "Failed to spawn Orca-dispatched imp"));
     }
   }
 
@@ -274,12 +297,12 @@ export class OrcaCoordinator {
   /** Lazily create the single orchestration run shared by every spawn on this coordinator. */
   private ensureRun(): Promise<{ id: string }> {
     if (!this.runPromise) {
-      this.runPromise = execOrca<RunCreateResponse>(
+      this.runPromise = execOrca<RunCreateResult>(
         this.exec,
         ["orchestration", "run-create", "--objective", "pi-imps session", "--json"],
         "run create",
       )
-        .then((resp) => ({ id: requireNonEmptyString(resp.run?.id, "run create") }))
+        .then((result) => ({ id: requireNonEmptyString(result.run?.id, "run create") }))
         .catch((err) => {
           // Allow a later spawn to retry run creation instead of being
           // permanently stuck on a one-time failure.
@@ -304,9 +327,12 @@ export class OrcaCoordinator {
     if (record.settled) return;
     record.settled = true;
     this.active.delete(record.dispatchId);
-    await this.safeExec(["orchestration", "worker-stop", "--worker", record.workerId, "--json"], "worker stop");
-    await this.safeExec(["orchestration", "worker-release", "--worker", record.workerId, "--json"], "worker release");
-    await this.safeExec(["terminal", "close", "--terminal", record.terminalId, "--json"], "terminal close");
+    await this.safeExec(["orchestration", "worker-stop", "--dispatch", record.dispatchId, "--json"], "worker stop");
+    await this.safeExec(
+      ["orchestration", "worker-release", "--dispatch", record.dispatchId, "--json"],
+      "worker release",
+    );
+    await this.safeExec(["terminal", "close", "--terminal", record.terminalHandle, "--json"], "terminal close");
   }
 
   /** Settle one active dispatch as complete: cleanup, then invoke `onComplete` exactly once. */
@@ -314,8 +340,11 @@ export class OrcaCoordinator {
     if (record.settled) return;
     record.settled = true;
     this.active.delete(record.dispatchId);
-    await this.safeExec(["orchestration", "worker-release", "--worker", record.workerId, "--json"], "worker release");
-    await this.safeExec(["terminal", "close", "--terminal", record.terminalId, "--json"], "terminal close");
+    await this.safeExec(
+      ["orchestration", "worker-release", "--dispatch", record.dispatchId, "--json"],
+      "worker release",
+    );
+    await this.safeExec(["terminal", "close", "--terminal", record.terminalHandle, "--json"], "terminal close");
     record.onComplete(result);
   }
 
@@ -327,15 +356,22 @@ export class OrcaCoordinator {
     const signal = this.mailboxAbortController.signal;
     this.mailboxLoopPromise = this.runMailboxLoop(runId, signal).finally(() => {
       this.mailboxRunning = false;
+      // If new active records were registered between the loop's exit
+      // condition being checked and this callback running, `ensureMailbox`
+      // calls made in that window saw `mailboxRunning === true` and were
+      // no-ops. Restart here so those dispatches are never left unwatched.
+      if (!this.shuttingDown && this.active.size > 0) {
+        this.ensureMailbox(runId);
+      }
     });
   }
 
   /** Serialized mailbox loop: one `check --wait` consumer at a time, draining/ack-ing every delivery it receives. */
   private async runMailboxLoop(runId: string, signal: AbortSignal): Promise<void> {
     while (!this.shuttingDown && this.active.size > 0) {
-      let resp: CheckResponse;
+      let resp: CheckResult;
       try {
-        resp = await execOrca<CheckResponse>(
+        resp = await execOrca<CheckResult>(
           this.exec,
           [
             "orchestration",
@@ -357,7 +393,7 @@ export class OrcaCoordinator {
         return;
       }
 
-      const ok = await this.drainDelivery(resp.delivery, signal);
+      const ok = await this.drainDelivery(resp, runId, signal);
       if (!ok) return;
     }
   }
@@ -367,24 +403,21 @@ export class OrcaCoordinator {
    * delivery the ack call itself returns, so nothing is silently dropped.
    * Returns false on a fatal ack failure (already handled via `failAllActive`).
    */
-  private async drainDelivery(
-    delivery: { id?: unknown; messages?: RawDeliveryMessage[] } | undefined,
-    signal: AbortSignal,
-  ): Promise<boolean> {
-    let current = delivery;
+  private async drainDelivery(delivery: CheckResult, runId: string, signal: AbortSignal): Promise<boolean> {
+    let current: CheckResult | undefined = delivery;
     while (current) {
       for (const message of current.messages ?? []) {
         await this.routeMailboxMessage(message);
       }
 
-      const deliveryId = current.id;
+      const deliveryId = current.deliveryId;
       if (typeof deliveryId !== "string" || !deliveryId) return true;
 
-      let ackResp: CheckResponse;
+      let ackResult: CheckResult;
       try {
-        ackResp = await execOrca<CheckResponse>(
+        ackResult = await execOrca<CheckResult>(
           this.exec,
-          ["orchestration", "check", "--ack", deliveryId, "--json"],
+          ["orchestration", "check", "--run", runId, "--ack", deliveryId, "--json"],
           "mailbox ack",
           signal,
         );
@@ -393,37 +426,53 @@ export class OrcaCoordinator {
         return false;
       }
 
-      current = ackResp.delivery;
+      current = ackResult;
     }
     return true;
   }
 
-  /** Route one `worker_done` message to its dispatch, ignoring anything unknown, stale, or unparseable. */
-  private async routeMailboxMessage(message: RawDeliveryMessage): Promise<void> {
+  /**
+   * Route one `worker_done` message to its dispatch, ignoring anything
+   * unknown, stale, or unparseable. Requires `type: "worker_done"`, a
+   * matching task id and `from_handle`, an exact lifecycle subject, and an
+   * `outcome` consistent with that subject (`completed` -> `succeeded`,
+   * `failed`/`truncated` -> `failed`).
+   */
+  private async routeMailboxMessage(message: RawMailboxMessage): Promise<void> {
+    if (message.type !== "worker_done") return;
+    if (typeof message.from_handle !== "string" || !message.from_handle) return;
+    if (typeof message.subject !== "string") return;
+    if (typeof message.body !== "string") return;
+
     const parsed = parseMailboxPayload(message.payload);
     if (!parsed) return;
 
     const record = this.active.get(parsed.dispatchId);
     if (!record) return;
-    if (parsed.taskId !== record.taskId || parsed.from !== record.workerHandle) return;
+    if (parsed.taskId !== record.taskId || message.from_handle !== record.terminalHandle) return;
 
-    const status = parseImpLifecycleStatus(parsed.subject);
+    const status = parseImpLifecycleStatus(message.subject);
     if (!status) return;
 
+    const expectedOutcome = status === "completed" ? "succeeded" : "failed";
+    if (parsed.outcome !== expectedOutcome) return;
+
+    const body = message.body;
     if (status === "completed") {
-      await this.completeDispatch(record, { output: parsed.body });
+      await this.completeDispatch(record, { output: body });
     } else if (status === "failed") {
       await this.completeDispatch(record, {
-        output: parsed.body,
-        error: parsed.body.trim() ? parsed.body : STABLE_NO_OUTPUT_FALLBACK,
+        output: body,
+        error: body.trim() ? body : STABLE_NO_OUTPUT_FALLBACK,
       });
     } else {
-      await this.completeDispatch(record, { output: parsed.body, truncated: true });
+      await this.completeDispatch(record, { output: body, truncated: true });
     }
   }
 
   /** Fatal mailbox error: fail every still-active dispatch exactly once, closing its terminal, then stop consuming. */
   private async failAllActive(message: string): Promise<void> {
+    const bounded = boundedError(`Orca mailbox failed: ${message || "unknown error"}`);
     const records = [...this.active.values()];
     this.active.clear();
     await Promise.all(
@@ -432,10 +481,10 @@ export class OrcaCoordinator {
         .map(async (record) => {
           record.settled = true;
           await this.safeExec(
-            ["terminal", "close", "--terminal", record.terminalId, "--json"],
+            ["terminal", "close", "--terminal", record.terminalHandle, "--json"],
             "terminal close (mailbox failure)",
           );
-          record.onComplete({ output: "", error: `Orca mailbox failed: ${message || "unknown error"}` });
+          record.onComplete({ output: "", error: bounded });
         }),
     );
   }
