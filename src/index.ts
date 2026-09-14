@@ -2,12 +2,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type AgentDiagnostic, buildAgentsBlock, discoverAgents } from "./agents.js";
 import { createImpsCommand } from "./command.js";
 import { createNamePool } from "./names.js";
-import {
-  createAgentDoneTool,
-  ORCA_RESTRICTED_TOOLS,
-  type OrcaWorkerDispatch,
-  verifyOrcaWorkerDispatch,
-} from "./orca.js";
 import { loadImpSettings } from "./settings.js";
 import { runningImps } from "./state.js";
 import { dismissAllImps, dismissTool, listImpsTool, summonTool, waitTool } from "./tools.js";
@@ -34,38 +28,9 @@ export default function (pi: ExtensionAPI): void {
     }
   });
 
-  // ── System prompt injection / Orca dispatched-worker detection ─────────
-
-  // Private to this session; never exposed via tool results or logs.
-  let orcaDispatch: OrcaWorkerDispatch | undefined;
-  let agentDoneRegistered = false;
+  // ── System prompt injection ─────────────────────────────────────────────
 
   pi.on("before_agent_start", (event) => {
-    const dispatch = verifyOrcaWorkerDispatch(event.prompt);
-    if (dispatch) {
-      // Reused worker sessions may receive a fresh dispatch preamble — update
-      // private context without re-registering the tool.
-      orcaDispatch = dispatch;
-
-      if (!agentDoneRegistered) {
-        pi.registerTool(
-          createAgentDoneTool(
-            () => orcaDispatch,
-            (command, args) => pi.exec(command, args),
-          ),
-        );
-        agentDoneRegistered = true;
-      }
-
-      const active = new Set(pi.getActiveTools());
-      for (const name of ORCA_RESTRICTED_TOOLS) active.delete(name);
-      active.add("agent_done");
-      pi.setActiveTools([...active]);
-
-      // Suppress the available-agents block; no recursive summoning for workers.
-      return { systemPrompt: event.systemPrompt };
-    }
-
     if (!agentsBlock) return;
     return { systemPrompt: `${event.systemPrompt}\n\n${agentsBlock}` };
   });

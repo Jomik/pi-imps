@@ -119,6 +119,26 @@ export function buildOrcaSendArgs(
   ];
 }
 
+/** Exact standalone marker line separating an Orca worker preamble from the task text. */
+export const ORCA_TASK_MARKER_LINE = "=== TASK ===";
+
+/**
+ * Strictly extract the task text following an exact standalone `=== TASK ===`
+ * marker line. Requires the marker to appear on its own line and to be
+ * followed by a non-empty (post-trim) remainder. Returns undefined when the
+ * marker is missing, not standalone, or the remainder is empty or
+ * whitespace-only.
+ */
+export function extractTaskAfterMarker(text: string): string | undefined {
+  const markerMatch = text.match(/^=== TASK ===$/m);
+  if (!markerMatch || markerMatch.index === undefined) return undefined;
+
+  const remainder = text.slice(markerMatch.index + markerMatch[0].length).replace(/^\r?\n/, "");
+  const task = remainder.trim();
+  if (!task) return undefined;
+  return task;
+}
+
 /** Redact a capability token from diagnostic text before it can reach the model or UI. */
 function redactCapability(text: string, capability: string): string {
   return capability ? text.split(capability).join("[redacted]") : text;
@@ -152,9 +172,13 @@ export function createAgentDoneTool(
 ): ToolDefinition<typeof AgentDoneParams, undefined> {
   return {
     name: "agent_done",
-    label: "Report Completion to Orca",
+    label: "Report Completion",
     description:
-      "Report this dispatched worker's outcome to Orca and end the assignment. Call exactly once when the task is finished, whether it succeeded or failed.",
+      "Report the outcome of this delegated task and end the assignment. Call exactly once when the task is finished, whether it succeeded or failed.",
+    promptSnippet: "agent_done — report the outcome of a delegated task and end the assignment",
+    promptGuidelines: [
+      "Call agent_done exactly once when the delegated task is finished, whether it succeeded or failed.",
+    ],
     parameters: AgentDoneParams,
     async execute(_toolCallId, params) {
       const dispatch = getDispatch();

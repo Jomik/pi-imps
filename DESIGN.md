@@ -11,8 +11,9 @@ We need a small, composable primitive: summon an agent, get its result, done.
 1. **Minimal core** — summon, wait, dismiss. Everything else is optional or external.
 2. **Low config** — sensible defaults, minimal setup. Configuration lives in `~/.pi/agent/imps.json` (optional). Agent frontmatter is the per-agent configuration surface.
 3. **Composable** — other extensions can build on top. Don't bake in observability chrome, custom renderers, or delegation strategies.
-4. **No recursion** — imps are leaf workers. Only the parent session spawns imps. For ordinary in-process summoned imp sessions, this is enforced by not loading pi-imps on the child session — imp tools are never registered, nothing to filter out. Verified Orca-dispatched workers instead load the bridge (see below) but deactivate recursive imp tools before the agent run, preserving the same leaf-worker invariant.
+4. **No recursion** — imps are leaf workers. Only the parent session spawns imps. For ordinary in-process summoned imp sessions, this is enforced by not loading pi-imps on the child session — imp tools are never registered, nothing to filter out. Orca-dispatched workers are launched with the dedicated worker extension in place of the main pi-imps extension (see Orca Worker Bridge below), which never registers summon/wait/dismiss/list_imps in the first place — nothing to filter out, preserving the same leaf-worker invariant.
 5. **Quiet** — no injected messages, no delegation reminders, no rotating hints. The LLM decides when to delegate based on its system prompt.
+6. **Isolated bridges** — host-specific bridges (e.g. Orca) live in their own dedicated extension entrypoint, never in the main pi-imps extension. The main extension has no knowledge of Orca.
 
 ## Core API Surface
 
@@ -147,7 +148,22 @@ Each toggle persists all selected additions or removals as they happen and affec
 
 The first version does not support non-TUI clients, edit global settings or agent frontmatter, add persistent UI, or launch and manage external agent hosts such as Orca or Herdr.
 
-When Pi is itself launched as an Orca-dispatched worker, pi-imps recognizes Orca's injected dispatch preamble and exposes an `agent_done` tool that reports the worker outcome through Orca without requiring shell access. Activation requires the strict injected dispatched-worker preamble to be present and parsed, and the parsed worker handle to exactly match `ORCA_TERMINAL_HANDLE`; without both, `agent_done` is not exposed. `agent_done` requires an outcome of `succeeded` or `failed` plus a non-empty summary, and is meant to be called exactly once when the assignment finishes. The parsed dispatch metadata (worker handle, capability, dispatch id, task) stays private to the extension and is never exposed as tool output; the capability token is additionally redacted from any diagnostic text surfaced to the model. A reused worker session can receive a fresh dispatch preamble that updates this private context without re-registering `agent_done`. The worker does not receive recursive imp tools or the available-agents prompt block. The bridge does not launch workers, create or merge worktrees, rename terminals, proxy other Orca orchestration operations, or provide a generic host adapter.
+### Orca Worker Bridge
+
+When Pi is launched as an Orca-dispatched worker, Orca does not load ordinary pi-imps. It instead launches Pi with the main extension manifest disabled and points it at a dedicated worker extension file shipped inside the pi-imps package (not listed in `package.json`'s `pi.extensions`, so it never auto-loads and never runs alongside the main extension), e.g.:
+
+```
+pi --no-extensions -e ./node_modules/pi-imps/src/orca-worker.ts
+```
+
+This worker extension has no agent discovery, no summon/wait/dismiss, and no available-agents system-prompt block — it is not pi-imps' ordinary session. Its only responsibilities:
+
+- Register `agent_done` exactly once, at extension load, backed by private mutable dispatch context.
+- On Pi's `input` event, verify the full raw input text: the strict injected dispatched-worker preamble must parse, and the parsed worker handle must exactly match `ORCA_TERMINAL_HANDLE`. The input must additionally contain an exact standalone `=== TASK ===` marker line followed by a non-empty task remainder. Any omission or mismatch leaves the input unchanged (`{ action: "continue" }`) and never updates the private dispatch context.
+- For a verified input, the private dispatch context is updated and the handler returns `{ action: "transform", text: <task text only> }` — the Orca preamble, worker/task/dispatch identifiers, capability token, coordinator instructions, and the embedded `orca orchestration send` command are all scrubbed from what the model sees. Attached images are left untouched.
+- A reused worker session can receive a fresh dispatch preamble on a later input, updating the private dispatch context without re-registering `agent_done`.
+
+`agent_done` requires an outcome of `succeeded` or `failed` plus a non-empty summary, and is meant to be called exactly once when the assignment finishes; its model-facing description, prompt snippet, and guidelines are generic — they never mention Orca, dispatch ids, the capability token, or the CLI command used to report completion. The parsed dispatch metadata (worker handle, capability, dispatch id, task) stays private to the extension and is never exposed as tool output; the capability token is additionally redacted from any diagnostic text surfaced to the model. The bridge does not launch workers, create or merge worktrees, rename terminals, proxy other Orca orchestration operations, or provide a generic host adapter.
 
 
 ### Child-Session Error Normalization

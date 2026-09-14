@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildOrcaSendArgs,
   createAgentDoneTool,
+  extractTaskAfterMarker,
   ORCA_DISPATCHED_WORKER_PREAMBLE,
   ORCA_RESTRICTED_TOOLS,
   parseOrcaWorkerDispatch,
@@ -147,6 +148,34 @@ describe("verifyOrcaWorkerDispatch", () => {
       ORCA_TERMINAL_HANDLE: "worker-7",
     } as NodeJS.ProcessEnv);
     expect(dispatch).toBeUndefined();
+  });
+});
+
+describe("extractTaskAfterMarker", () => {
+  it("extracts the task text following an exact standalone marker line", () => {
+    expect(extractTaskAfterMarker("preamble text\n\n=== TASK ===\nFix the failing test.")).toBe(
+      "Fix the failing test.",
+    );
+  });
+
+  it("trims surrounding whitespace but preserves internal task formatting", () => {
+    expect(extractTaskAfterMarker("=== TASK ===\n  Line one.\nLine two.  \n")).toBe("Line one.\nLine two.");
+  });
+
+  it("rejects a missing marker", () => {
+    expect(extractTaskAfterMarker("no marker here, just a task description")).toBeUndefined();
+  });
+
+  it("rejects a marker that is not standalone on its own line", () => {
+    expect(extractTaskAfterMarker("prefix === TASK === Fix the bug.")).toBeUndefined();
+  });
+
+  it("rejects an empty remainder after the marker", () => {
+    expect(extractTaskAfterMarker("=== TASK ===\n")).toBeUndefined();
+  });
+
+  it("rejects a whitespace-only remainder after the marker", () => {
+    expect(extractTaskAfterMarker("=== TASK ===\n   \n  ")).toBeUndefined();
   });
 });
 
