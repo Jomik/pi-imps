@@ -148,9 +148,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     extensionFactories: [InlineExtension],
     extensionsOverride: (base) => ({
       ...base,
-      extensions: base.extensions.filter((ext) =>
-        shouldIncludeExtension(ext, toolAllowlist, settings.additionalExtensions),
-      ),
+      extensions: selectImpExtensions(base.extensions, toolAllowlist, settings.additionalExtensions),
     }),
   });
   await loader.reload();
@@ -396,6 +394,21 @@ export function shouldIncludeExtension(
   // Keep extension only if it provides at least one allowed tool
   const extToolNames = Array.from(ext.tools.keys());
   return extToolNames.some((t) => toolAllowlist.includes(t));
+}
+
+/**
+ * Select the subset of extensions to load for an imp session.
+ *
+ * Pure filter over `shouldIncludeExtension`; does not mutate `extensions`.
+ * Returns the original `Extension` objects (with their `resolvedPath`s)
+ * unchanged so callers can derive source information from the result.
+ */
+export function selectImpExtensions(
+  extensions: Extension[],
+  toolAllowlist: string[] | undefined,
+  additionalExtensions: string[],
+): Extension[] {
+  return extensions.filter((ext) => shouldIncludeExtension(ext, toolAllowlist, additionalExtensions));
 }
 
 /**
