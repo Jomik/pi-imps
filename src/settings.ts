@@ -8,6 +8,7 @@ const DEFAULTS: ImpSettings = {
   toolAllowlist: undefined,
   additionalExtensions: [],
   agents: {},
+  orca: { enabled: false },
 };
 
 /**
@@ -27,7 +28,16 @@ export function parseImpSettings(block: Record<string, unknown> | undefined): Im
 
   const agents = parseAgentsConfig(block.agents);
 
-  return { turnLimit, toolAllowlist, additionalExtensions, agents };
+  const orca = parseOrcaConfig(block.orca);
+
+  return { turnLimit, toolAllowlist, additionalExtensions, agents, orca };
+}
+
+/** Parse and validate the raw `orca` config object: only `enabled` (boolean), default false. */
+function parseOrcaConfig(raw: unknown): { enabled: boolean } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULTS.orca };
+  const entry = raw as Record<string, unknown>;
+  return { enabled: typeof entry.enabled === "boolean" ? entry.enabled : DEFAULTS.orca.enabled };
 }
 
 /** Parse and validate a raw agents config object. */

@@ -36,7 +36,14 @@ function parseResult(r: AgentToolResult<unknown>) {
 }
 
 function makeSettings(overrides: Partial<ImpSettings> = {}): ImpSettings {
-  return { turnLimit: 30, toolAllowlist: undefined, additionalExtensions: [], agents: {}, ...overrides };
+  return {
+    turnLimit: 30,
+    toolAllowlist: undefined,
+    additionalExtensions: [],
+    agents: {},
+    orca: { enabled: false },
+    ...overrides,
+  };
 }
 
 const testAgent: AgentConfig = {

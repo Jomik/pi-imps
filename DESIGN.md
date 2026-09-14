@@ -187,3 +187,18 @@ The limit is a circuit breaker, not a budget. It exists to catch genuine runaway
 
 Generated per imp, recycled when freed.
 
+### Orca Launch Preparation
+
+Global settings gain an `orca` block: `{ "orca": { "enabled": boolean } }`, defaulting to `false`. Only the nested `enabled` boolean is parsed; a missing or malformed `orca` block (non-object, non-boolean `enabled`) defaults to `false`, consistent with the rest of `imps.json`'s lenient parsing. `enabled: false` (the default) keeps ordinary in-process imp spawning unchanged.
+
+When preparing (not yet executing) an Orca-backed launch, pi-imps:
+
+- Requires a POSIX host (`darwin` or `linux`); any other platform fails explicitly with no local fallback.
+- Requires `orca status --json` and `orca worktree current --json` to both exit zero with parseable JSON reporting `ok: true`; any failure (unavailable Orca, no current worktree, malformed/non-`ok` JSON) fails explicitly with an actionable diagnostic.
+- Resolves the exact same model, thinking level (including the `max`→`xhigh` mapping), turn limit, and global+project additive tool grants as an in-process imp session, and selects the same extensions via `selectImpExtensions` (pi-imps itself always excluded; `additionalExtensions` always included).
+- Derives the selected extensions' absolute paths from their `resolvedPath`/`path`, excludes inline pseudo-paths (e.g. the hidden error-normalizer extension), and deduplicates while preserving selection order.
+- Resolves its own internal worker entrypoint (`src/index.ts`) from `import.meta.url` so the launch always loads the same pi-imps worker code that answers `--is-imp`.
+- Builds a `pi --no-extensions --no-skills --no-prompt-templates --no-themes -e <worker> [-e <extension> ...] --is-imp --imp-turn-limit <n> --model <provider>/<id> --thinking <level> --system-prompt <agent body> [--tools <comma-list,agent_done>]` argv. The model id must be `<provider>/<id>`; launch preparation fails if either is unavailable. `--tools` is included only when the resolved tool allowlist is defined, unioning in `agent_done` so it is always available; when the allowlist is undefined, `--tools` is omitted entirely (all tools among the selected extensions/builtins).
+- Renders that argv into a single POSIX command line by single-quoting every token (`'` → `'\''`) and rejecting any token containing a NUL byte. No secret or capability/task data enters this command — the agent's system prompt is the only free-form text, passed as one quoted argument.
+- Returns a serializable launch plan (command, argv, and every resolved value/path) without performing any Orca run/task/terminal operation itself. Orchestration, terminal/task creation, and summon routing are separate, later concerns.
+

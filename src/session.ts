@@ -87,6 +87,62 @@ const InlineExtension: ExtensionFactory = (pi) => {
   pi.on("tool_result", normalizeEmptyToolError);
 };
 
+export interface ImpResourceLoader {
+  loader: DefaultResourceLoader;
+  toolAllowlist: string[] | undefined;
+}
+
+/**
+ * Build the `DefaultResourceLoader` and resolved tool allowlist shared by
+ * in-process imp spawning and Orca launch preparation.
+ *
+ * The caller is responsible for `await loader.reload()` before reading
+ * `loader.getExtensions()` or passing the loader to `createAgentSession`.
+ */
+export function buildImpResourceLoader(cwd: string, config: AgentConfig, settings: ImpSettings): ImpResourceLoader {
+  const projectConfig = loadProjectConfig(cwd);
+  const agentKey = config.name;
+  const globalAgentTools = settings.agents[agentKey]?.tools;
+  const projectAgentTools = projectConfig.agents?.[agentKey]?.tools;
+  const additiveTools = mergeAdditiveTools(globalAgentTools, projectAgentTools);
+
+  const toolAllowlist = resolveToolAllowlist(config.tools, settings.toolAllowlist, additiveTools);
+
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir: getAgentDir(),
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    systemPrompt: config.systemPrompt || undefined,
+    extensionFactories: [InlineExtension],
+    extensionsOverride: (base) => ({
+      ...base,
+      extensions: selectImpExtensions(base.extensions, toolAllowlist, settings.additionalExtensions),
+    }),
+  });
+
+  return { loader, toolAllowlist };
+}
+
+/**
+ * Resolve the model an imp session/launch uses: the named agent's configured
+ * model, or the parent session's model when the agent has none.
+ */
+export function resolveImpModel(
+  config: AgentConfig,
+  parentModel: Model<Api>,
+  modelRegistry: ModelRegistry,
+): Model<Api> {
+  if (!config.model) return parentModel;
+  const available = modelRegistry.getAvailable();
+  const resolved = available.find((m) => m.name === config.model || m.id === config.model);
+  if (!resolved) {
+    throw new Error(`Model "${config.model}" not found in registry`);
+  }
+  return resolved;
+}
+
 export interface SpawnImpSessionOptions {
   task: string;
   config: AgentConfig;
@@ -127,42 +183,12 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     onComplete,
   } = opts;
 
-  const systemPrompt = config.systemPrompt;
-
-  // Load project config and resolve per-agent additive tools
-  const projectConfig = loadProjectConfig(cwd);
-  const agentKey = config.name;
-  const globalAgentTools = settings.agents[agentKey]?.tools;
-  const projectAgentTools = projectConfig.agents?.[agentKey]?.tools;
-  const additiveTools = mergeAdditiveTools(globalAgentTools, projectAgentTools);
-
-  const toolAllowlist = resolveToolAllowlist(config.tools, settings.toolAllowlist, additiveTools);
-
-  const loader = new DefaultResourceLoader({
-    cwd,
-    agentDir: getAgentDir(),
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    systemPrompt: systemPrompt || undefined,
-    extensionFactories: [InlineExtension],
-    extensionsOverride: (base) => ({
-      ...base,
-      extensions: selectImpExtensions(base.extensions, toolAllowlist, settings.additionalExtensions),
-    }),
-  });
+  // Load project config and resolve per-agent additive tools, plus extensions
+  const { loader, toolAllowlist } = buildImpResourceLoader(cwd, config, settings);
   await loader.reload();
 
   // Resolve model: named agent's model or parent model
-  let model = parentModel;
-  if (config.model) {
-    const available = modelRegistry.getAvailable();
-    const resolved = available.find((m) => m.name === config.model || m.id === config.model);
-    if (!resolved) {
-      throw new Error(`Model "${config.model}" not found in registry`);
-    }
-    model = resolved;
-  }
+  const model = resolveImpModel(config, parentModel, modelRegistry);
 
   const { session } = await createAgentSession({
     cwd,

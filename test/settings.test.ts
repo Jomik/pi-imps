@@ -122,6 +122,36 @@ describe("parseImpSettings", () => {
     });
     expect(settings.agents.mason).toEqual({ tools: ["run_tests"] });
   });
+
+  // ── orca field ───────────────────────────────────────────
+
+  it("defaults orca.enabled to false when block is undefined", () => {
+    expect(parseImpSettings(undefined).orca).toEqual({ enabled: false });
+  });
+
+  it("defaults orca.enabled to false when orca is absent", () => {
+    expect(parseImpSettings({}).orca).toEqual({ enabled: false });
+  });
+
+  it("reads orca.enabled true", () => {
+    expect(parseImpSettings({ orca: { enabled: true } }).orca).toEqual({ enabled: true });
+  });
+
+  it("reads orca.enabled false", () => {
+    expect(parseImpSettings({ orca: { enabled: false } }).orca).toEqual({ enabled: false });
+  });
+
+  it("defaults orca.enabled to false when orca is not an object", () => {
+    expect(parseImpSettings({ orca: "yes" }).orca).toEqual({ enabled: false });
+    expect(parseImpSettings({ orca: [true] }).orca).toEqual({ enabled: false });
+    expect(parseImpSettings({ orca: null }).orca).toEqual({ enabled: false });
+  });
+
+  it("defaults orca.enabled to false when enabled is not a boolean", () => {
+    expect(parseImpSettings({ orca: { enabled: "true" } }).orca).toEqual({ enabled: false });
+    expect(parseImpSettings({ orca: { enabled: 1 } }).orca).toEqual({ enabled: false });
+    expect(parseImpSettings({ orca: {} }).orca).toEqual({ enabled: false });
+  });
 });
 
 describe("loadImpSettings", () => {
@@ -174,6 +204,18 @@ describe("loadImpSettings", () => {
     writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["run_tests"] } } }));
     const settings = loadImpSettings(tmpDir);
     expect(settings.agents).toEqual({ mason: { tools: ["run_tests"] } });
+  });
+
+  it("reads orca.enabled from imps.json", () => {
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ orca: { enabled: true } }));
+    const settings = loadImpSettings(tmpDir);
+    expect(settings.orca).toEqual({ enabled: true });
+  });
+
+  it("defaults orca.enabled to false when imps.json omits it", () => {
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ turnLimit: 10 }));
+    const settings = loadImpSettings(tmpDir);
+    expect(settings.orca).toEqual({ enabled: false });
   });
 
   it("ignores unknown fields via parseImpSettings validation", () => {
