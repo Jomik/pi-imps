@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Extension } from "@earendil-works/pi-coding-agent";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getExtensionPackageName, shouldIncludeExtension } from "../src/session.js";
+import { getExtensionPackageName, selectImpExtensions, shouldIncludeExtension } from "../src/session.js";
 
 // ─── temp fixture ──────────────────────────────────────────────────────────
 
@@ -199,5 +199,104 @@ describe("shouldIncludeExtension — unpopulated sourceInfo", () => {
     expect(shouldIncludeExtension(ext, [], ["pi-ward"])).toBe(true);
     // Not in additionalExtensions + restrictive allowlist → excluded
     expect(shouldIncludeExtension(ext, ["read", "edit"], [])).toBe(false);
+  });
+});
+
+// ─── selectImpExtensions ───────────────────────────────────────────────────
+
+describe("selectImpExtensions", () => {
+  const selRoot = join(tmpdir(), `pi-imps-select-test-${Date.now()}`);
+
+  beforeAll(() => {
+    for (const name of ["pi-imps", "pi-ward", "pi-sandbox", "pi-medium"]) {
+      const dir = join(selRoot, "node_modules", name, "src");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(selRoot, "node_modules", name, "package.json"), JSON.stringify({ name }));
+    }
+  });
+
+  afterAll(() => {
+    rmSync(selRoot, { recursive: true, force: true });
+  });
+
+  function makePkgExt(pkgDir: string, toolNames: string[]): Extension {
+    const filePath = join(selRoot, "node_modules", pkgDir, "src", "index.ts");
+    const tools = new Map<string, unknown>();
+    for (const t of toolNames) tools.set(t, {});
+    return {
+      path: filePath,
+      resolvedPath: filePath,
+      sourceInfo: {
+        path: filePath,
+        source: `npm:${pkgDir}@1.0.0`,
+        scope: "user",
+        origin: "package" as const,
+        baseDir: join(selRoot, "node_modules", pkgDir),
+      },
+      handlers: new Map(),
+      tools: tools as Extension["tools"],
+      messageRenderers: new Map(),
+      commands: new Map(),
+      flags: new Map(),
+      shortcuts: new Map(),
+    } as unknown as Extension;
+  }
+
+  it("filters a mixed collection: excludes pi-imps, keeps additionalExtensions, keeps allowed tools, drops disallowed", () => {
+    const impsExt = makePkgExt("pi-imps", ["summon", "wait"]);
+    const wardExt = makePkgExt("pi-ward", ["guard_check"]); // additionalExtensions, tool not allowed
+    const sandboxExt = makePkgExt("pi-sandbox", ["read"]); // allowed tool
+    const disallowedExt = makePkgExt("pi-medium", ["fetch_content"]); // not allowed, not additional
+    const inlineExt = {
+      path: "<inline:1>",
+      resolvedPath: "<inline:1>",
+      sourceInfo: { path: "<inline:1>", source: "temporary", scope: "user", origin: "top-level", baseDir: undefined },
+      handlers: new Map(),
+      tools: new Map(),
+      messageRenderers: new Map(),
+      commands: new Map(),
+      flags: new Map(),
+      shortcuts: new Map(),
+    } as unknown as Extension;
+
+    const extensions = [impsExt, wardExt, sandboxExt, disallowedExt, inlineExt];
+    const result = selectImpExtensions(extensions, ["read"], ["pi-ward"]);
+
+    // Exact expected object identities, in original relative order.
+    expect(result).toEqual([wardExt, sandboxExt, inlineExt]);
+    expect(result[0]).toBe(wardExt);
+    expect(result[1]).toBe(sandboxExt);
+    expect(result[2]).toBe(inlineExt);
+  });
+
+  it("does not mutate the input array", () => {
+    const sandboxExt = makePkgExt("pi-sandbox", ["read"]);
+    const disallowedExt = makePkgExt("pi-medium", ["fetch_content"]);
+    const extensions = [sandboxExt, disallowedExt];
+    const snapshot = [...extensions];
+
+    selectImpExtensions(extensions, ["read"], []);
+
+    expect(extensions).toEqual(snapshot);
+    expect(extensions.length).toBe(2);
+  });
+
+  it("undefined allowlist keeps all non-excluded extensions (parity with shouldIncludeExtension)", () => {
+    const sandboxExt = makePkgExt("pi-sandbox", ["read"]);
+    const disallowedExt = makePkgExt("pi-medium", ["fetch_content"]);
+    const impsExt = makePkgExt("pi-imps", ["summon"]);
+
+    const result = selectImpExtensions([sandboxExt, disallowedExt, impsExt], undefined, []);
+
+    expect(result).toEqual([sandboxExt, disallowedExt]);
+  });
+
+  it("empty allowlist keeps only additionalExtensions (parity with shouldIncludeExtension)", () => {
+    const sandboxExt = makePkgExt("pi-sandbox", ["read"]);
+    const disallowedExt = makePkgExt("pi-medium", ["fetch_content"]);
+
+    const result = selectImpExtensions([sandboxExt, disallowedExt], [], ["pi-sandbox"]);
+
+    expect(result).toEqual([sandboxExt]);
   });
 });

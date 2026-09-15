@@ -57,6 +57,8 @@ export interface ImpSettings {
   additionalExtensions: string[];
   /** Per-agent additive tool grants from global ~/.pi/agent/imps.json */
   agents: Record<string, { tools?: string[] }>;
+  /** Orca-backed external imp launches. Default: disabled (local in-process spawning). */
+  orca: { enabled: boolean };
 }
 
 /**

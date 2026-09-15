@@ -25,6 +25,8 @@ function createMockPi() {
     }),
     registerTool: vi.fn(),
     registerCommand: vi.fn(),
+    registerFlag: vi.fn(),
+    getFlag: vi.fn(() => false),
     getThinkingLevel: vi.fn(() => "off"),
   } as unknown as ExtensionAPI;
   return { pi, handlers };
