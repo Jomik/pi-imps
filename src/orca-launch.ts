@@ -1,7 +1,9 @@
-import { isAbsolute, resolve } from "node:path";
+import type { Dirent } from "node:fs";
+import { readdirSync } from "node:fs";
+import { extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { OrcaExecFn } from "./orca.js";
 import { buildImpResourceLoader, resolveImpModel, resolveImpThinkingLevel, resolveTurnLimit } from "./session.js";
 import type { AgentConfig, ImpSettings, ThinkingLevel } from "./types.js";
@@ -85,6 +87,56 @@ function dedupePaths(paths: string[]): string[] {
     }
   }
   return result;
+}
+
+/** Basename prefix identifying an Orca host-integration extension under `${agentDir}/extensions`. */
+const ORCA_HOST_EXTENSION_PREFIX = "orca-";
+
+/** File extensions eligible for direct-file Orca host extension matches. */
+const SUPPORTED_HOST_EXTENSION_FILE_EXTENSIONS: ReadonlySet<string> = new Set([".ts", ".js"]);
+
+/**
+ * Discover Orca host-integration extensions installed globally under
+ * `${agentDir}/extensions`. Matches direct child entries whose basename
+ * starts with `orca-`:
+ *
+ * - regular `.ts`/`.js` files
+ * - directories (extension packages or index directories)
+ * - symlinks, of any target type — passed through as-is; Pi's `-e` loader
+ *   natively resolves single files, index directories, and package
+ *   manifests, so no local symlink target inspection is done here.
+ *
+ * Non-matching basenames and other entry kinds (unsupported file
+ * extensions, sockets, devices, etc.) are ignored. A missing extensions
+ * directory (or a non-directory in its place) returns an empty list; any
+ * other read failure throws a concise, actionable error. Results are
+ * absolute paths, sorted lexically for a deterministic `-e` order.
+ */
+export function discoverOrcaHostExtensions(agentDir: string): string[] {
+  const extensionsDir = join(agentDir, "extensions");
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(extensionsDir, { withFileTypes: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return [];
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to read Orca host extensions directory "${extensionsDir}": ${message}`);
+  }
+
+  const matches: string[] = [];
+  for (const entry of entries) {
+    if (!entry.name.startsWith(ORCA_HOST_EXTENSION_PREFIX)) continue;
+    if (entry.isSymbolicLink() || entry.isDirectory()) {
+      matches.push(entry.name);
+      continue;
+    }
+    if (entry.isFile() && SUPPORTED_HOST_EXTENSION_FILE_EXTENSIONS.has(extname(entry.name))) {
+      matches.push(entry.name);
+    }
+  }
+
+  return matches.sort().map((name) => join(extensionsDir, name));
 }
 
 export interface BuildOrcaLaunchArgvParams {
@@ -200,16 +252,21 @@ export async function prepareOrcaLaunch(opts: PrepareOrcaLaunchOptions): Promise
   await loader.reload();
   opts.signal?.throwIfAborted();
   const { extensions } = loader.getExtensions();
-  const extensionPaths = dedupePaths(
-    extensions
-      .map((ext) => {
-        if (ext.resolvedPath && isAbsolute(ext.resolvedPath)) return ext.resolvedPath;
-        const fallback = ext.path;
-        if (!fallback || fallback.startsWith("<")) return fallback;
-        return isAbsolute(fallback) ? fallback : resolve(opts.cwd, fallback);
-      })
-      .filter((path): path is string => !!path && !path.startsWith("<")),
-  );
+  const selectedExtensionPaths = extensions
+    .map((ext) => {
+      if (ext.resolvedPath && isAbsolute(ext.resolvedPath)) return ext.resolvedPath;
+      const fallback = ext.path;
+      if (!fallback || fallback.startsWith("<")) return fallback;
+      return isAbsolute(fallback) ? fallback : resolve(opts.cwd, fallback);
+    })
+    .filter((path): path is string => !!path && !path.startsWith("<"));
+
+  // Orca host-integration extensions (e.g. status/prefill/title bridges)
+  // always load for Orca-dispatched workers, regardless of the tool
+  // allowlist or `additionalExtensions` — they are not ordinary
+  // tool-providing extensions and are never subject to that filtering.
+  const hostExtensionPaths = discoverOrcaHostExtensions(getAgentDir());
+  const extensionPaths = dedupePaths([...selectedExtensionPaths, ...hostExtensionPaths]);
 
   const argv = buildOrcaLaunchArgv({
     workerEntrypoint: WORKER_ENTRYPOINT,

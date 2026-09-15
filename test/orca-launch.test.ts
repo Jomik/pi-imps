@@ -1,10 +1,14 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Extension, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig, ImpSettings } from "../src/types.js";
+
+// Path returned by the default `getAgentDir` mock below. Deliberately
+// nonexistent so tests never touch the real `~/.pi/agent/` directory.
+const DEFAULT_MOCK_AGENT_DIR = "/nonexistent-pi-agent-dir-for-testing-xyz";
 
 // ─── Controllable DefaultResourceLoader mock ──────────────────────────────
 //
@@ -18,6 +22,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const real = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
   return {
     ...real,
+    getAgentDir: vi.fn(() => DEFAULT_MOCK_AGENT_DIR),
     DefaultResourceLoader: class {
       private opts: {
         extensionsOverride?: (base: { extensions: Extension[] }) => { extensions: Extension[] };
@@ -34,7 +39,9 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   };
 });
 
-const { prepareOrcaLaunch, buildOrcaLaunchArgv, buildOrcaCommand, posixQuote } = await import("../src/orca-launch.js");
+const { prepareOrcaLaunch, buildOrcaLaunchArgv, buildOrcaCommand, posixQuote, discoverOrcaHostExtensions } =
+  await import("../src/orca-launch.js");
+const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -190,12 +197,133 @@ describe("buildOrcaLaunchArgv", () => {
   });
 });
 
+describe("discoverOrcaHostExtensions", () => {
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = mkdtempSync(join(tmpdir(), "pi-imps-orca-host-ext-"));
+  });
+
+  afterEach(() => {
+    rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  function extDir(): string {
+    const dir = join(agentDir, "extensions");
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  it("matches a direct .ts file under extensions/ with the orca- prefix", () => {
+    const dir = extDir();
+    const file = join(dir, "orca-status.ts");
+    writeFileSync(file, "export default () => {}");
+
+    expect(discoverOrcaHostExtensions(agentDir)).toEqual([file]);
+  });
+
+  it("matches a direct .js file under extensions/ with the orca- prefix", () => {
+    const dir = extDir();
+    const file = join(dir, "orca-title.js");
+    writeFileSync(file, "module.exports = () => {}");
+
+    expect(discoverOrcaHostExtensions(agentDir)).toEqual([file]);
+  });
+
+  it("matches a directory under extensions/ with the orca- prefix", () => {
+    const dir = extDir();
+    const pkgDir = join(dir, "orca-prefill");
+    mkdirSync(pkgDir);
+    writeFileSync(join(pkgDir, "index.ts"), "export default () => {}");
+
+    expect(discoverOrcaHostExtensions(agentDir)).toEqual([pkgDir]);
+  });
+
+  it("matches a symlink under extensions/ with the orca- prefix, if the platform supports it", () => {
+    const dir = extDir();
+    const target = join(dir, "real-target.ts");
+    writeFileSync(target, "export default () => {}");
+    const link = join(dir, "orca-linked.ts");
+    try {
+      symlinkSync(target, link);
+    } catch {
+      // Symlink creation is not portable (e.g. restricted Windows CI); skip.
+      return;
+    }
+
+    expect(discoverOrcaHostExtensions(agentDir)).toEqual([link]);
+  });
+
+  it("ignores entries whose basename does not start with orca-", () => {
+    const dir = extDir();
+    writeFileSync(join(dir, "pi-sandbox.ts"), "export default () => {}");
+
+    expect(discoverOrcaHostExtensions(agentDir)).toEqual([]);
+  });
+
+  it("ignores an orca- prefixed file with an unsupported extension", () => {
+    const dir = extDir();
+    writeFileSync(join(dir, "orca-notes.md"), "# notes");
+
+    expect(discoverOrcaHostExtensions(agentDir)).toEqual([]);
+  });
+
+  it("returns an empty list when the extensions directory is missing", () => {
+    expect(discoverOrcaHostExtensions(agentDir)).toEqual([]);
+  });
+
+  it("returns an empty list for ENOTDIR (a file where the extensions directory is expected)", () => {
+    // Make the expected extensions-directory path an ordinary file so
+    // readdirSync throws ENOTDIR rather than ENOENT.
+    writeFileSync(join(agentDir, "extensions"), "not a directory");
+
+    expect(discoverOrcaHostExtensions(agentDir)).toEqual([]);
+  });
+
+  it("throws a concise, actionable error for a read failure other than missing/ENOTDIR", () => {
+    const dir = extDir();
+    chmodSync(dir, 0o000);
+    try {
+      const result = (() => {
+        try {
+          discoverOrcaHostExtensions(agentDir);
+          return undefined;
+        } catch (err) {
+          return err;
+        }
+      })();
+      if (result === undefined) {
+        // Running as a user unaffected by directory permissions (e.g. root
+        // in CI); the permission-denied path cannot be exercised here.
+        return;
+      }
+      expect((result as Error).message).toMatch(/Failed to read Orca host extensions directory/);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
+  it("sorts multiple matches lexically", () => {
+    const dir = extDir();
+    writeFileSync(join(dir, "orca-zeta.ts"), "export default () => {}");
+    writeFileSync(join(dir, "orca-alpha.ts"), "export default () => {}");
+    mkdirSync(join(dir, "orca-mid"));
+
+    expect(discoverOrcaHostExtensions(agentDir)).toEqual([
+      join(dir, "orca-alpha.ts"),
+      join(dir, "orca-mid"),
+      join(dir, "orca-zeta.ts"),
+    ]);
+  });
+});
+
 describe("prepareOrcaLaunch", () => {
   let cwd: string;
 
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), "pi-imps-orca-launch-"));
     mockExtensions = [];
+    vi.mocked(getAgentDir).mockReturnValue(DEFAULT_MOCK_AGENT_DIR);
   });
 
   afterEach(() => {
@@ -600,6 +728,126 @@ describe("prepareOrcaLaunch", () => {
     });
 
     expect(plan.extensionPaths).toEqual(["/fake/shared/src/index.ts"]);
+  });
+
+  // ── Orca host-integration extensions ──────────────────────────────────
+
+  it("always appends discovered Orca host extensions after selected extensions", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-imps-orca-host-integration-"));
+    const extDir = join(agentDir, "extensions");
+    mkdirSync(extDir, { recursive: true });
+    const hostExt = join(extDir, "orca-status.ts");
+    writeFileSync(hostExt, "export default () => {}");
+    vi.mocked(getAgentDir).mockReturnValue(agentDir);
+
+    try {
+      mockExtensions = [makeExt("pi-read", ["read"], "/fake/read/src/index.ts")];
+      const exec = makeExec();
+      const plan = await prepareOrcaLaunch({
+        cwd,
+        config: makeAgent(),
+        parentModel,
+        parentThinkingLevel: "low",
+        modelRegistry: makeModelRegistry([parentModel]),
+        settings: makeSettings(),
+        exec,
+        platform: "linux",
+      });
+
+      expect(plan.extensionPaths).toEqual(["/fake/read/src/index.ts", hostExt]);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("dedupes a discovered host extension against an already-selected extension path", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-imps-orca-host-dedupe-"));
+    const extDir = join(agentDir, "extensions");
+    mkdirSync(extDir, { recursive: true });
+    const sharedPath = join(extDir, "orca-status.ts");
+    writeFileSync(sharedPath, "export default () => {}");
+    vi.mocked(getAgentDir).mockReturnValue(agentDir);
+
+    try {
+      mockExtensions = [makeExt("orca-status", ["read"], sharedPath)];
+      const exec = makeExec();
+      const plan = await prepareOrcaLaunch({
+        cwd,
+        config: makeAgent(),
+        parentModel,
+        parentThinkingLevel: "low",
+        modelRegistry: makeModelRegistry([parentModel]),
+        settings: makeSettings(),
+        exec,
+        platform: "linux",
+      });
+
+      expect(plan.extensionPaths).toEqual([sharedPath]);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("places host extension -e flags after all selected extension -e flags in argv", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-imps-orca-host-order-"));
+    const extDir = join(agentDir, "extensions");
+    mkdirSync(extDir, { recursive: true });
+    const hostExt = join(extDir, "orca-title.ts");
+    writeFileSync(hostExt, "export default () => {}");
+    vi.mocked(getAgentDir).mockReturnValue(agentDir);
+
+    try {
+      mockExtensions = [makeExt("pi-read", ["read"], "/fake/read/src/index.ts")];
+      const exec = makeExec();
+      const plan = await prepareOrcaLaunch({
+        cwd,
+        config: makeAgent(),
+        parentModel,
+        parentThinkingLevel: "low",
+        modelRegistry: makeModelRegistry([parentModel]),
+        settings: makeSettings(),
+        exec,
+        platform: "linux",
+      });
+
+      const eIndices = plan.argv.reduce<number[]>((acc, tok, i) => {
+        if (tok === "-e") acc.push(i);
+        return acc;
+      }, []);
+      const eValues = eIndices.map((i) => plan.argv[i + 1]);
+      expect(eValues).toEqual([plan.workerEntrypoint, "/fake/read/src/index.ts", hostExt]);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("never loads a host extension when the tool allowlist would otherwise filter it out", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-imps-orca-host-allowlist-"));
+    const extDir = join(agentDir, "extensions");
+    mkdirSync(extDir, { recursive: true });
+    const hostExt = join(extDir, "orca-status.ts");
+    writeFileSync(hostExt, "export default () => {}");
+    vi.mocked(getAgentDir).mockReturnValue(agentDir);
+
+    try {
+      mockExtensions = [];
+      const exec = makeExec();
+      const plan = await prepareOrcaLaunch({
+        cwd,
+        config: makeAgent({ tools: [] }),
+        parentModel,
+        parentThinkingLevel: "low",
+        modelRegistry: makeModelRegistry([parentModel]),
+        settings: makeSettings(),
+        exec,
+        platform: "linux",
+      });
+
+      expect(plan.toolAllowlist).toEqual([]);
+      expect(plan.extensionPaths).toEqual([hostExt]);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("omits --tools when the resolved allowlist is undefined (all tools)", async () => {

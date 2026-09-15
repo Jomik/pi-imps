@@ -157,6 +157,8 @@ Every terminal pi-imps creates for an Orca-dispatched imp is explicitly closed w
 
 **Known limitation:** Orca workers currently expose no token/turn telemetry over the orchestration protocol, so `list_imps`/`wait` stats for Orca-dispatched imps stay at zero or unavailable. This means missing telemetry, not that the imp actually used zero turns or tokens.
 
+**Host integration extensions:** Any globally-installed extension whose top-level directory entry under `~/.pi/agent/extensions/` has a basename starting with `orca-` is always explicitly loaded for Orca-dispatched workers (in addition to the resolved tool/`additionalExtensions` extensions above), regardless of the resolved tool allowlist. This is separate from `additionalExtensions`: it is not configured in `imps.json`, it isn't restricted to the current agent or project, and it can't be disabled per-agent. It exists so Orca host-status/prefill/title integrations can attach to a worker unconditionally, without every project or agent needing to opt in via `additionalExtensions`.
+
 ## Settings reference
 
 All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
