@@ -48,6 +48,69 @@ function createMockPi(isImp = false, flags: Record<string, unknown> = {}): MockP
   return { pi, handlers, registerTool, registerCommand, registerFlag, exec, sendUserMessage };
 }
 
+/** Trigger the (single, bootstrap) `session_start` handler registered at factory time. */
+function startSession(handlers: MockPi["handlers"], reason: "startup" | "reload" = "startup") {
+  return handlers.get("session_start")?.({ reason }, createMockContext());
+}
+
+describe("factory execution (before session_start)", () => {
+  it("never calls getFlag during factory execution", () => {
+    const { pi } = createMockPi(false);
+    extensionFactory(pi);
+
+    expect(pi.getFlag).not.toHaveBeenCalled();
+  });
+
+  it("registers only the two custom flags and a single bootstrap session_start handler; no tools or commands yet", () => {
+    const { pi, handlers, registerTool, registerCommand, registerFlag } = createMockPi(false);
+    extensionFactory(pi);
+
+    expect(registerFlag).toHaveBeenCalledTimes(2);
+    expect(registerFlag).toHaveBeenCalledWith("is-imp", expect.objectContaining({ type: "boolean", default: false }));
+    expect(registerFlag).toHaveBeenCalledWith(
+      "imp-turn-limit",
+      expect.objectContaining({ type: "string", default: "30" }),
+    );
+    expect([...handlers.keys()]).toEqual(["session_start"]);
+    expect(registerTool).not.toHaveBeenCalled();
+    expect(registerCommand).not.toHaveBeenCalled();
+  });
+
+  it("regression: getFlag is unavailable/throws before session_start, then reports is-imp=true only once read during the event", () => {
+    const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+    const registerTool = vi.fn();
+    let flagsAvailable = false;
+    const getFlag = vi.fn((name: string) => {
+      if (!flagsAvailable) throw new Error("custom flag values are not available yet");
+      if (name === "is-imp") return true;
+      if (name === "imp-turn-limit") return "30";
+      return undefined;
+    });
+    const pi = {
+      on: vi.fn((name: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+        handlers.set(name, handler);
+      }),
+      registerTool,
+      registerCommand: vi.fn(),
+      registerFlag: vi.fn(),
+      getFlag,
+      getThinkingLevel: vi.fn(() => "off"),
+      exec: vi.fn().mockResolvedValue({ stdout: "{}", stderr: "", code: 0 }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    // Factory execution never reads getFlag, so it must not throw even though
+    // getFlag itself would throw if called right now.
+    expect(() => extensionFactory(pi)).not.toThrow();
+
+    flagsAvailable = true;
+    startSession(handlers);
+
+    const registeredNames = registerTool.mock.calls.map((c) => (c[0] as { name: string }).name);
+    expect(registeredNames).toEqual(["agent_done"]);
+  });
+});
+
 describe("ordinary pi-imps extension behavior", () => {
   it("registers the is-imp flag with a false default", () => {
     const { pi, registerFlag } = createMockPi();
@@ -56,18 +119,24 @@ describe("ordinary pi-imps extension behavior", () => {
     expect(registerFlag).toHaveBeenCalledWith("is-imp", expect.objectContaining({ type: "boolean", default: false }));
   });
 
-  it("registers exactly the four built-in imp tools and never agent_done", () => {
-    const { pi, registerTool } = createMockPi();
+  it("registers exactly the four built-in imp tools and never agent_done, only after session_start", () => {
+    const { pi, handlers, registerTool } = createMockPi();
     extensionFactory(pi);
+    expect(registerTool).not.toHaveBeenCalled();
+
+    startSession(handlers);
 
     const registeredNames = registerTool.mock.calls.map((c) => (c[0] as { name: string }).name);
     expect(registeredNames).toEqual(["summon", "wait", "dismiss", "list_imps"]);
     expect(registeredNames).not.toContain("agent_done");
   });
 
-  it("registers the /imps command and session hooks", () => {
+  it("registers the /imps command and session hooks after session_start", () => {
     const { pi, registerCommand, handlers } = createMockPi();
     extensionFactory(pi);
+    expect(registerCommand).not.toHaveBeenCalled();
+
+    startSession(handlers);
 
     expect(registerCommand).toHaveBeenCalledWith("imps", expect.anything());
     expect(handlers.has("session_start")).toBe(true);
@@ -80,13 +149,24 @@ describe("ordinary pi-imps extension behavior", () => {
     const { pi, handlers } = createMockPi();
     extensionFactory(pi);
 
-    handlers.get("session_start")?.({ reason: "startup" }, createMockContext());
+    startSession(handlers);
     const result = handlers.get("before_agent_start")?.(
       { prompt: "Fix the failing test", systemPrompt: "base system prompt" },
       createMockContext(),
     );
 
     expect(result).toBeUndefined();
+  });
+
+  it("a second session_start does not duplicate tool/command registration", () => {
+    const { pi, handlers, registerTool, registerCommand } = createMockPi();
+    extensionFactory(pi);
+
+    startSession(handlers, "startup");
+    startSession(handlers, "reload");
+
+    expect(registerTool).toHaveBeenCalledTimes(4);
+    expect(registerCommand).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -98,14 +178,20 @@ describe("imp worker mode (is-imp flag)", () => {
     expect(registerFlag).toHaveBeenCalledWith("is-imp", expect.objectContaining({ type: "boolean", default: false }));
   });
 
-  it("registers exactly agent_done and no parent tools, command, or hooks", () => {
+  it("registers exactly agent_done and no parent tools, command, or hooks, only after session_start", () => {
     const { pi, registerTool, registerCommand, handlers } = createMockPi(true);
     extensionFactory(pi);
+    expect(registerTool).not.toHaveBeenCalled();
+
+    startSession(handlers);
 
     const registeredNames = registerTool.mock.calls.map((c) => (c[0] as { name: string }).name);
     expect(registeredNames).toEqual(["agent_done"]);
     expect(registerCommand).not.toHaveBeenCalled();
-    expect(handlers.has("session_start")).toBe(false);
+    // The bootstrap session_start handler itself is always present (both
+    // modes register it at factory time); worker mode never registers any
+    // of the ordinary parent hooks/tools/commands.
+    expect(handlers.has("session_start")).toBe(true);
     expect(handlers.has("before_agent_start")).toBe(false);
     expect(handlers.has("session_before_switch")).toBe(false);
     expect(handlers.has("session_shutdown")).toBe(false);
@@ -114,6 +200,16 @@ describe("imp worker mode (is-imp flag)", () => {
     expect(handlers.has("agent_settled")).toBe(true);
     expect(handlers.has("tool_execution_end")).toBe(false);
     expect(handlers.has("input")).toBe(true);
+  });
+
+  it("a second session_start does not re-initialize worker mode or register a duplicate agent_done", () => {
+    const { pi, handlers, registerTool } = createMockPi(true);
+    extensionFactory(pi);
+
+    startSession(handlers, "startup");
+    startSession(handlers, "reload");
+
+    expect(registerTool).toHaveBeenCalledTimes(1);
   });
 
   describe("input transform", () => {
@@ -145,8 +241,9 @@ ${task}`;
     }
 
     it("agent_done guidance is generic and never mentions Orca, dispatch ids, capability, or CLI", () => {
-      const { pi, registerTool } = createMockPi(true);
+      const { pi, handlers, registerTool } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       const tool = registerTool.mock.calls[0][0];
       const guidanceText = [tool.description, tool.promptSnippet, ...(tool.promptGuidelines ?? [])].join(" ");
@@ -160,6 +257,7 @@ ${task}`;
     it("transforms a verified worker input to exactly the task text, stripping preamble/id/capability/command", () => {
       const { pi, handlers } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       const prompt = workerPrompt("Fix the failing test in src/foo.ts.");
       const result = handlers.get("input")?.({ type: "input", text: prompt, source: "interactive" }, undefined) as
@@ -177,6 +275,7 @@ ${task}`;
     it("preserves images by not overriding them on transform", () => {
       const { pi, handlers } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       const images = [{ type: "image", data: "base64", mimeType: "image/png" }];
       const result = handlers.get("input")?.(
@@ -190,6 +289,7 @@ ${task}`;
     it("continues unchanged when the exact '=== TASK ===' marker is missing", () => {
       const { pi, handlers } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       const prompt = workerPrompt("ignored").replace("=== TASK ===\n", "");
       const result = handlers.get("input")?.({ type: "input", text: prompt, source: "interactive" }, undefined);
@@ -200,6 +300,7 @@ ${task}`;
     it("continues unchanged when the task after the marker is empty", () => {
       const { pi, handlers } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       const prompt = workerPrompt("   ");
       const result = handlers.get("input")?.({ type: "input", text: prompt, source: "interactive" }, undefined);
@@ -211,6 +312,7 @@ ${task}`;
       process.env.ORCA_TERMINAL_HANDLE = "worker-9";
       const { pi, handlers } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       const result = handlers.get("input")?.(
         { type: "input", text: workerPrompt("Do the thing."), source: "interactive" },
@@ -223,6 +325,7 @@ ${task}`;
     it("continues unchanged for a malformed (non-Orca) prompt", () => {
       const { pi, handlers } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       const result = handlers.get("input")?.(
         { type: "input", text: "Please fix the failing test.\n=== TASK ===\nDo it.", source: "interactive" },
@@ -235,10 +338,11 @@ ${task}`;
     it("does not update dispatch context or register a tool on an invalid input", async () => {
       const { pi, handlers, registerTool, exec } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       handlers.get("input")?.({ type: "input", text: "not an orca prompt", source: "interactive" }, undefined);
 
-      // Only the single agent_done registration from load; no dispatch was ever set.
+      // Only the single agent_done registration from session_start; no dispatch was ever set.
       expect(registerTool).toHaveBeenCalledTimes(1);
       const tool = registerTool.mock.calls[0][0];
       await expect(
@@ -250,6 +354,7 @@ ${task}`;
     it("updates private dispatch on reuse; the single registered agent_done reads the latest dispatch", async () => {
       const { pi, handlers, registerTool, exec } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       const handler = handlers.get("input");
       if (!handler) throw new Error("input handler not registered");
@@ -277,6 +382,7 @@ ${task}`;
     it("second verified dispatch resets turn/lifecycle state", () => {
       const { pi, handlers, sendUserMessage } = createMockPi(true, { "imp-turn-limit": "3" });
       extensionFactory(pi);
+      startSession(handlers);
 
       const inputHandler = handlers.get("input");
       const turnEndHandler = handlers.get("turn_end");
@@ -319,6 +425,7 @@ ${task}`;
     it("tool_result handler uses normalizeEmptyToolError", () => {
       const { pi, handlers } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       const handler = handlers.get("tool_result");
       if (!handler) throw new Error("tool_result handler not registered");
@@ -363,7 +470,7 @@ ${task}`;
       return { type: "turn_end", turnIndex: 0, message: { role: "assistant", content: [{ type: "text", text }] } };
     }
 
-    it("registers both custom flags", () => {
+    it("registers both custom flags at factory time", () => {
       const { pi, registerFlag } = createMockPi(true);
       extensionFactory(pi);
 
@@ -371,14 +478,16 @@ ${task}`;
       expect(registerFlag).toHaveBeenCalledWith("imp-turn-limit", expect.objectContaining({ type: "string" }));
     });
 
-    it("fails worker startup on an invalid --imp-turn-limit", () => {
-      const { pi } = createMockPi(true, { "imp-turn-limit": "1" });
-      expect(() => extensionFactory(pi)).toThrow(/imp-turn-limit/);
+    it("fails worker startup on an invalid --imp-turn-limit at session_start, not at factory time", () => {
+      const { pi, handlers } = createMockPi(true, { "imp-turn-limit": "1" });
+      expect(() => extensionFactory(pi)).not.toThrow();
+      expect(() => startSession(handlers)).toThrow(/imp-turn-limit/);
     });
 
     it("uses the default turn limit when unset", () => {
       const { pi, handlers, sendUserMessage } = createMockPi(true);
       extensionFactory(pi);
+      startSession(handlers);
 
       const inputHandler = handlers.get("input");
       const turnEndHandler = handlers.get("turn_end");
@@ -397,6 +506,7 @@ ${task}`;
       const { FINAL_TURN_DIRECTIVE } = await import("../src/session.js");
       const { pi, handlers, sendUserMessage } = createMockPi(true, { "imp-turn-limit": "3" });
       extensionFactory(pi);
+      startSession(handlers);
 
       const inputHandler = handlers.get("input");
       const turnEndHandler = handlers.get("turn_end");
@@ -412,6 +522,7 @@ ${task}`;
     it("final turn awaits the controlled exec promise before aborting; sends truncated subject, outcome failed, and the last assistant output", async () => {
       const { pi, handlers } = createMockPi(true, { "imp-turn-limit": "2" });
       extensionFactory(pi);
+      startSession(handlers);
 
       let resolveExec: (value: { stdout: string; stderr: string; code: number }) => void = () => {};
       const controlledExec = vi.fn().mockReturnValue(
@@ -456,6 +567,7 @@ ${task}`;
       const { STABLE_NO_OUTPUT_FALLBACK } = await import("../src/orca.js");
       const { pi, handlers, exec } = createMockPi(true, { "imp-turn-limit": "2" });
       extensionFactory(pi);
+      startSession(handlers);
 
       const inputHandler = handlers.get("input");
       const turnEndHandler = handlers.get("turn_end");
@@ -477,6 +589,7 @@ ${task}`;
     it("natural agent_settled sends failed once", async () => {
       const { pi, handlers, exec } = createMockPi(true, { "imp-turn-limit": "30" });
       extensionFactory(pi);
+      startSession(handlers);
 
       const inputHandler = handlers.get("input");
       const settledHandler = handlers.get("agent_settled");
@@ -496,6 +609,7 @@ ${task}`;
     it("successful agent_done returns terminate: true, and a subsequent agent_settled sends no duplicate", async () => {
       const { pi, handlers, registerTool, exec } = createMockPi(true, { "imp-turn-limit": "30" });
       extensionFactory(pi);
+      startSession(handlers);
 
       const inputHandler = handlers.get("input");
       const settledHandler = handlers.get("agent_settled");
@@ -515,6 +629,7 @@ ${task}`;
     it("a failed agent_done send can retry", async () => {
       const { pi, handlers, registerTool, exec } = createMockPi(true, { "imp-turn-limit": "30" });
       extensionFactory(pi);
+      startSession(handlers);
       exec
         .mockResolvedValueOnce({ stdout: "", stderr: "unauthorized", code: 1 })
         .mockResolvedValueOnce({ stdout: "{}", stderr: "", code: 0 });
@@ -536,6 +651,7 @@ ${task}`;
     it("an invalid/unverified prompt reaches the turn limit without a directive, report, or abort", () => {
       const { pi, handlers, sendUserMessage, exec } = createMockPi(true, { "imp-turn-limit": "2" });
       extensionFactory(pi);
+      startSession(handlers);
 
       const inputHandler = handlers.get("input");
       const turnEndHandler = handlers.get("turn_end");
@@ -557,6 +673,7 @@ ${task}`;
     it("agent_done called during the active final turn is sealed as truncated regardless of the claimed outcome", async () => {
       const { pi, handlers, registerTool, exec } = createMockPi(true, { "imp-turn-limit": "3" });
       extensionFactory(pi);
+      startSession(handlers);
 
       const inputHandler = handlers.get("input");
       const turnEndHandler = handlers.get("turn_end");
@@ -587,6 +704,7 @@ ${task}`;
     it("a failed automatic final-turn report leaves the run unsealed; agent_settled retries and seals pi-imps:truncated", async () => {
       const { pi, handlers, exec } = createMockPi(true, { "imp-turn-limit": "2" });
       extensionFactory(pi);
+      startSession(handlers);
       exec
         .mockResolvedValueOnce({ stdout: "", stderr: "unauthorized", code: 1 })
         .mockResolvedValueOnce({ stdout: "{}", stderr: "", code: 0 });
@@ -615,6 +733,7 @@ ${task}`;
     it("an in-flight automatic report blocks a concurrent agent_settled attempt; only one send seals completion", async () => {
       const { pi, handlers } = createMockPi(true, { "imp-turn-limit": "2" });
       extensionFactory(pi);
+      startSession(handlers);
 
       let resolveExec: (value: { stdout: string; stderr: string; code: number }) => void = () => {};
       const controlledExec = vi.fn().mockReturnValue(
