@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildOrcaSendArgs,
   buildStatusSubject,
-  createAgentDoneTool,
   createImpLifecycleState,
   DEFAULT_IMP_TURN_LIMIT,
   extractTaskAfterMarker,
@@ -368,63 +367,5 @@ describe("reportImpCompletion", () => {
 
     await expect(reportImpCompletion(undefined, state, "failed", "body", exec)).rejects.toThrow(/No active dispatch/);
     expect(exec).not.toHaveBeenCalled();
-  });
-});
-
-describe("agent_done tool", () => {
-  it("invokes the injected report function with outcome/summary and returns terminate: true", async () => {
-    const report = vi.fn().mockResolvedValue(undefined);
-    const tool = createAgentDoneTool(report);
-
-    const result = await tool.execute(
-      "call-1",
-      { outcome: "succeeded", summary: "All good." },
-      undefined,
-      undefined,
-      undefined as never,
-    );
-
-    expect(report).toHaveBeenCalledWith("succeeded", "All good.");
-    expect(result.terminate).toBe(true);
-    expect(result.content[0]).toEqual({ type: "text", text: "Completion reported." });
-    const text = (result.content[0] as { text: string }).text;
-    expect(text).not.toMatch(/orca/i);
-    expect(text).not.toMatch(/dispatch/i);
-  });
-
-  it("propagates a rejected report as a thrown error", async () => {
-    const report = vi.fn().mockRejectedValue(new Error("Failed to report completion: [redacted]"));
-    const tool = createAgentDoneTool(report);
-
-    await expect(
-      tool.execute(
-        "call-1",
-        { outcome: "failed", summary: "Could not finish." },
-        undefined,
-        undefined,
-        undefined as never,
-      ),
-    ).rejects.toThrow(/\[redacted\]/);
-  });
-
-  it("propagates a host-neutral no-active-dispatch error from the report function", async () => {
-    const report = vi
-      .fn()
-      .mockRejectedValue(new Error("No active dispatch for this session; cannot report completion."));
-    const tool = createAgentDoneTool(report);
-
-    await expect(
-      tool.execute("call-1", { outcome: "succeeded", summary: "Done." }, undefined, undefined, undefined as never),
-    ).rejects.toThrow(/No active dispatch/);
-  });
-
-  it("guidance is generic and never mentions Orca, dispatch ids, capability, or CLI", () => {
-    const tool = createAgentDoneTool(vi.fn());
-    const guidanceText = [tool.description, tool.promptSnippet, ...(tool.promptGuidelines ?? [])].join(" ");
-    expect(guidanceText.toLowerCase()).not.toContain("orca");
-    expect(guidanceText.toLowerCase()).not.toContain("dispatch");
-    expect(guidanceText.toLowerCase()).not.toContain("capability");
-    expect(guidanceText.toLowerCase()).not.toContain("cli");
-    expect(guidanceText).toMatch(/exactly once/);
   });
 });

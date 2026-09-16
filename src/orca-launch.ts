@@ -150,10 +150,9 @@ export interface BuildOrcaLaunchArgvParams {
 }
 
 /**
- * Build the exact `pi` argv for an Orca imp launch. `agent_done` is always
- * allowed: it is unioned into an explicit tool allowlist, and omitted
- * (along with `--tools`) entirely means every tool among the selected
- * extensions/builtins is available.
+ * Build the exact `pi` argv for an Orca imp launch. An explicit tool allowlist
+ * is passed through unchanged; omitted `--tools` means every tool among the
+ * selected extensions/builtins is available.
  */
 export function buildOrcaLaunchArgv(params: BuildOrcaLaunchArgvParams): string[] {
   const argv: string[] = [
@@ -183,10 +182,7 @@ export function buildOrcaLaunchArgv(params: BuildOrcaLaunchArgvParams): string[]
   );
 
   if (params.toolAllowlist !== undefined) {
-    const tools = params.toolAllowlist.includes("agent_done")
-      ? params.toolAllowlist
-      : [...params.toolAllowlist, "agent_done"];
-    argv.push("--tools", tools.join(","));
+    argv.push("--tools", params.toolAllowlist.join(","));
   }
 
   return argv;

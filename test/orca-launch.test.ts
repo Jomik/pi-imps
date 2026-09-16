@@ -157,7 +157,7 @@ describe("buildOrcaLaunchArgv", () => {
     systemPrompt: "You are a coder.",
   };
 
-  it("builds exact tokens/ordering with a defined tool allowlist (unions agent_done)", () => {
+  it("builds exact tokens/ordering with a defined tool allowlist", () => {
     const argv = buildOrcaLaunchArgv({ ...base, toolAllowlist: ["read", "edit"] });
     expect(argv).toEqual([
       "pi",
@@ -181,13 +181,8 @@ describe("buildOrcaLaunchArgv", () => {
       "--system-prompt",
       "You are a coder.",
       "--tools",
-      "read,edit,agent_done",
+      "read,edit",
     ]);
-  });
-
-  it("does not duplicate agent_done when already present in the allowlist", () => {
-    const argv = buildOrcaLaunchArgv({ ...base, toolAllowlist: ["read", "agent_done"] });
-    expect(argv.at(-1)).toBe("read,agent_done");
   });
 
   it("omits --tools entirely when the allowlist is undefined (all tools)", () => {
@@ -651,7 +646,7 @@ describe("prepareOrcaLaunch", () => {
 
     expect(plan.toolAllowlist).toEqual(expect.arrayContaining(["read", "run_tests"]));
     expect(plan.argv).toContain("--tools");
-    expect(plan.argv.at(-1)).toContain("agent_done");
+    expect(plan.argv.at(-1)).toBe("read,run_tests");
   });
 
   it("falls back to a cwd-resolved absolute path when resolvedPath is missing and ext.path is relative", async () => {

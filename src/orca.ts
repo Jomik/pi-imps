@@ -1,5 +1,4 @@
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FINAL_TURN_DIRECTIVE, normalizeEmptyToolError } from "./session.js";
 
 /**
@@ -7,8 +6,8 @@ import { FINAL_TURN_DIRECTIVE, normalizeEmptyToolError } from "./session.js";
  *
  * Detects Orca's injected dispatched-worker preamble, extracts the worker
  * terminal handle / task id / dispatch id / capability from the embedded
- * `worker_done` command, and exposes an `agent_done` tool that reports the
- * outcome through Orca via `pi.exec("orca", ...)` — no shell access.
+ * `worker_done` command, and reports the terminal assistant outcome through
+ * Orca via `pi.exec("orca", ...)` — no shell access.
  *
  * All parsed identifiers are private to this module's callers; the capability
  * is never returned in a tool result and is redacted from any diagnostic text.
@@ -100,10 +99,10 @@ export function verifyOrcaWorkerDispatch(
 }
 
 /**
- * Stable, non-model-controlled worker lifecycle status. `completed` maps
- * from a successful `agent_done` call, `failed` from a failed `agent_done`
- * call or a settle with no report, and `truncated` from turn-limit
- * enforcement. The model can only influence the report body, never this
+ * Stable, non-model-controlled worker lifecycle status. Normal terminal
+ * assistant output maps to `completed`, provider failure stop reasons or an
+ * empty terminal response map to `failed`, and turn-limit enforcement maps
+ * to `truncated`. The model can only influence the report body, never this
  * status.
  */
 export type ImpLifecycleStatus = "completed" | "failed" | "truncated";
@@ -210,12 +209,21 @@ export type OrcaExecFn = (
 export interface ImpLifecycleState {
   turnCount: number;
   lastOutput: string;
+  lastStopReason: string | undefined;
+  lastErrorMessage: string | undefined;
   completionSealed: boolean;
   completionInFlight: boolean;
 }
 
 export function createImpLifecycleState(): ImpLifecycleState {
-  return { turnCount: 0, lastOutput: "", completionSealed: false, completionInFlight: false };
+  return {
+    turnCount: 0,
+    lastOutput: "",
+    lastStopReason: undefined,
+    lastErrorMessage: undefined,
+    completionSealed: false,
+    completionInFlight: false,
+  };
 }
 
 /**
@@ -269,51 +277,6 @@ export async function reportImpCompletion(
   }
 }
 
-const AgentDoneParams = Type.Object({
-  outcome: Type.Union([Type.Literal("succeeded"), Type.Literal("failed")], {
-    description: "Whether the dispatched task succeeded or failed",
-  }),
-  summary: Type.String({ description: "Concise summary of the outcome", minLength: 1 }),
-});
-
-/** Reports the model-initiated completion outcome exactly once. */
-export type AgentDoneReport = (outcome: "succeeded" | "failed", summary: string) => Promise<void>;
-
-/**
- * Build the `agent_done` tool for a verified Orca dispatched worker.
- *
- * Takes a single injected `report` function so all dispatch lookup, status
- * mapping, exactly-once sealing, and exec/redaction logic lives in one place
- * (`reportImpCompletion`), shared with the internal turn-limit and settle
- * reporting paths.
- */
-export function createAgentDoneTool(report: AgentDoneReport): ToolDefinition<typeof AgentDoneParams, undefined> {
-  return {
-    name: "agent_done",
-    label: "Report Completion",
-    description:
-      "Report the outcome of this delegated task and end the assignment. Call exactly once when the task is finished, whether it succeeded or failed.",
-    promptSnippet: "agent_done — report the outcome of a delegated task and end the assignment",
-    promptGuidelines: [
-      "Call agent_done exactly once when the delegated task is finished, whether it succeeded or failed.",
-    ],
-    parameters: AgentDoneParams,
-    async execute(_toolCallId, params) {
-      await report(params.outcome, params.summary);
-
-      return {
-        // Generic, outcome-independent text: the actual reported status may
-        // be overridden (e.g. to `truncated` during an active final turn),
-        // so the model-visible result must never assert a specific outcome
-        // that could contradict it.
-        content: [{ type: "text", text: "Completion reported." }],
-        details: undefined,
-        terminate: true,
-      };
-    },
-  };
-}
-
 /** Parse `--imp-turn-limit`: a strict whole number >= 2. Falls back to the default when unset. */
 export function parseImpTurnLimit(raw: string | undefined): number {
   const value = raw ?? String(DEFAULT_IMP_TURN_LIMIT);
@@ -343,8 +306,8 @@ function extractAssistantText(message: unknown): string | undefined {
  *
  * Not a second extension entrypoint — invoked by `src/index.ts`'s default
  * export when the `is-imp` flag is set, before any ordinary pi-imps session
- * hooks/tools/commands are registered. Registers `agent_done` exactly once,
- * backed by private mutable dispatch context and lifecycle state.
+ * hooks/tools/commands are registered. Completion is reported from private
+ * dispatch context and lifecycle state when the worker settles.
  *
  * Verifies Orca's injected dispatched-worker preamble on the raw `input`
  * event text, strips it down to the task text after an exact standalone
@@ -358,28 +321,14 @@ function extractAssistantText(message: unknown): string | undefined {
  * report) sends an authenticated internal completion with a stable status
  * the model never controls. `turn_end` and `agent_settled` enforcement is
  * gated on a verified active dispatch — without one, neither the directive,
- * a completion attempt, nor an abort is ever triggered. An `agent_done` call
- * received during the active final turn is sealed as `truncated` regardless
- * of the model-claimed outcome, and `agent_settled` reports `truncated`
- * (rather than `failed`) whenever the turn limit was already reached,
- * preserving that status across a failed-then-retried report.
+ * a completion attempt, nor an abort is ever triggered. `agent_settled`
+ * reports `truncated` whenever the turn limit was reached, otherwise it
+ * classifies the terminal assistant response using the same stop-reason and
+ * non-empty-output rules as an in-process imp.
  */
 export function initOrcaWorker(pi: ExtensionAPI, turnLimit: number): void {
   let dispatch: OrcaWorkerDispatch | undefined;
   let state: ImpLifecycleState = createImpLifecycleState();
-
-  const report: AgentDoneReport = (outcome, summary) => {
-    // During an active final turn (turnCount already at turnLimit - 1, after
-    // the FINAL TURN directive but before that turn's own turn_end fires),
-    // the local turn limit takes precedence: the report is sealed as
-    // `truncated` regardless of the model-claimed outcome, since the run is
-    // being cut off either way.
-    const isFinalTurn = state.turnCount === turnLimit - 1;
-    const status: ImpLifecycleStatus = isFinalTurn ? "truncated" : outcome === "succeeded" ? "completed" : "failed";
-    return reportImpCompletion(dispatch, state, status, summary, (command, args) => pi.exec(command, args));
-  };
-
-  pi.registerTool(createAgentDoneTool(report));
 
   pi.on("tool_result", normalizeEmptyToolError);
 
@@ -404,7 +353,11 @@ export function initOrcaWorker(pi: ExtensionAPI, turnLimit: number): void {
     state.turnCount++;
 
     const text = extractAssistantText(event.message);
-    if (text !== undefined) state.lastOutput = text;
+    if (text !== undefined && event.message.role === "assistant") {
+      state.lastOutput = text;
+      state.lastStopReason = event.message.stopReason;
+      state.lastErrorMessage = event.message.errorMessage;
+    }
 
     if (state.completionSealed) return;
 
@@ -433,11 +386,19 @@ export function initOrcaWorker(pi: ExtensionAPI, turnLimit: number): void {
     // enforce or report.
     if (!dispatch) return;
     if (state.completionSealed) return;
-    // Preserve truncation on retry: if the local turn limit was already
-    // reached (e.g. the automatic turn_end report failed and stayed
-    // unsealed), the status must still be `truncated`, not `failed`.
-    const status: ImpLifecycleStatus = state.turnCount >= turnLimit ? "truncated" : "failed";
-    const body = state.lastOutput.trim() || STABLE_NO_OUTPUT_FALLBACK;
+
+    const output = state.lastOutput.trim();
+    const failed =
+      state.lastStopReason === "error" ||
+      state.lastStopReason === "aborted" ||
+      state.lastStopReason === "length" ||
+      output === "";
+    const status: ImpLifecycleStatus = state.turnCount >= turnLimit ? "truncated" : failed ? "failed" : "completed";
+    const diagnostic =
+      state.lastErrorMessage?.trim() || `Imp failed to complete (stopReason: ${state.lastStopReason ?? "unknown"})`;
+    const body =
+      status === "failed" ? (output ? `${output}\n\n${diagnostic}` : diagnostic) : output || STABLE_NO_OUTPUT_FALLBACK;
+
     try {
       await reportImpCompletion(dispatch, state, status, body, (command, args) => pi.exec(command, args));
     } catch {
