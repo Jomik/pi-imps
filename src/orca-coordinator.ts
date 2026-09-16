@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { OrcaExecFn } from "./orca.js";
@@ -49,6 +52,35 @@ export interface OrcaSpawnHandle {
 
 /** Maximum length of any actionable error text surfaced by the coordinator. */
 const MAX_ERROR_LENGTH = 500;
+
+/** Prefix for the private temp directory created to hold one spawn's system-prompt file. */
+const SYSTEM_PROMPT_TEMP_PREFIX = "pi-imps-orca-system-prompt-";
+
+interface SystemPromptTempFile {
+  /** Absolute path to the written system-prompt file, passed to `--system-prompt` in place of the prompt content. */
+  readonly path: string;
+  /** Private temp directory containing `path`; removing this removes the file. */
+  readonly dir: string;
+}
+
+/**
+ * Write `systemPrompt` verbatim to a uniquely named file inside a freshly
+ * created private temp directory (`mkdtemp` defaults to mode 0700), with the
+ * file itself restricted to 0600. Pi natively reads an existing path handed
+ * to `--system-prompt`, so the prompt content itself never appears in the
+ * terminal command.
+ */
+async function writeSystemPromptTempFile(systemPrompt: string): Promise<SystemPromptTempFile> {
+  const dir = await mkdtemp(join(tmpdir(), SYSTEM_PROMPT_TEMP_PREFIX));
+  const path = join(dir, "system-prompt.md");
+  try {
+    await writeFile(path, systemPrompt, { mode: 0o600 });
+    return { path, dir };
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
 
 /** Bound actionable error text to a fixed length. Never includes command args, task text, or system prompt. */
 function boundedError(message: string): string {
@@ -214,20 +246,29 @@ export class OrcaCoordinator {
     }
 
     opts.onActivity("preparing");
-    const plan = await prepareOrcaLaunch({
-      cwd: opts.cwd,
-      config: opts.config,
-      parentModel: opts.parentModel,
-      parentThinkingLevel: opts.parentThinkingLevel,
-      modelRegistry: opts.modelRegistry,
-      settings: opts.settings,
-      exec: this.exec,
-      signal: opts.signal,
-    });
+    let promptTempFile: SystemPromptTempFile | undefined;
+    let promptTempFileRemoved = false;
+    const cleanupPromptTempFile = async (): Promise<void> => {
+      if (!promptTempFile || promptTempFileRemoved) return;
+      await rm(promptTempFile.dir, { recursive: true, force: true });
+      promptTempFileRemoved = true;
+    };
 
     let terminalHandle: string | undefined;
     let capturedDispatchId: string | undefined;
     try {
+      promptTempFile = await writeSystemPromptTempFile(opts.config.systemPrompt);
+      const plan = await prepareOrcaLaunch({
+        cwd: opts.cwd,
+        config: { ...opts.config, systemPrompt: promptTempFile.path },
+        parentModel: opts.parentModel,
+        parentThinkingLevel: opts.parentThinkingLevel,
+        modelRegistry: opts.modelRegistry,
+        settings: opts.settings,
+        exec: this.exec,
+        signal: opts.signal,
+      });
+
       const run = await this.ensureRun();
 
       opts.onActivity("starting terminal");
@@ -251,6 +292,9 @@ export class OrcaCoordinator {
           boundedError(`Orca terminal wait did not become satisfied (status: ${String(waitResult.wait?.status)})`),
         );
       }
+
+      // Pi has finished loading the temp system-prompt file by now; remove it immediately.
+      await cleanupPromptTempFile();
 
       opts.onActivity("dispatching");
       const taskResult = await execOrca<TaskCreateResult>(
@@ -293,6 +337,15 @@ export class OrcaCoordinator {
 
       return { abort: () => this.abortDispatch(record) };
     } catch (err) {
+      // Failure to remove the prompt temp file must never silently leak the
+      // prompt: it takes priority as the reported failure, while existing
+      // dispatch/terminal cleanup still runs unconditionally below.
+      let cleanupErr: unknown;
+      try {
+        await cleanupPromptTempFile();
+      } catch (e) {
+        cleanupErr = e;
+      }
       if (capturedDispatchId) {
         await this.safeExec(
           ["orchestration", "worker-stop", "--dispatch", capturedDispatchId, "--json"],
@@ -306,7 +359,8 @@ export class OrcaCoordinator {
       if (terminalHandle) {
         await this.safeExec(["terminal", "close", "--terminal", terminalHandle, "--json"], "terminal close (cleanup)");
       }
-      const message = err instanceof Error ? err.message : String(err);
+      const primary = cleanupErr ?? err;
+      const message = primary instanceof Error ? primary.message : String(primary);
       throw new Error(boundedError(message || "Failed to spawn Orca-dispatched imp"));
     }
   }

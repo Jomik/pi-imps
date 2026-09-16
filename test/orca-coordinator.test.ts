@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -347,6 +347,80 @@ describe("OrcaCoordinator.spawn", () => {
     const workerCall = execSpy.mock.calls.find((c) => c[1][0] === "orchestration" && c[1][1] === "worker-start");
     expect(workerCall?.[1]).toEqual(expect.arrayContaining(["--terminal", "handle_1"]));
     expect(workerCall?.[1]).not.toContain("--worker");
+  });
+
+  it("writes the system prompt to a private 0600 temp file, passes only its path into terminal create, and removes it once terminal wait succeeds", async () => {
+    const cli = new FakeOrcaCli();
+    const coordinator = makeCoordinator(cli);
+    const systemPrompt = "You are a coder.";
+
+    const before = new Set(readdirSync(tmpdir()).filter((n) => n.startsWith("pi-imps-orca-system-prompt-")));
+    let capturedTempDir: string | undefined;
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      if (args[0] === "terminal" && args[1] === "create") {
+        const newDirs = readdirSync(tmpdir()).filter(
+          (n) => n.startsWith("pi-imps-orca-system-prompt-") && !before.has(n),
+        );
+        expect(newDirs).toHaveLength(1);
+        capturedTempDir = join(tmpdir(), newDirs[0]);
+
+        const files = readdirSync(capturedTempDir);
+        expect(files).toHaveLength(1);
+        const filePath = join(capturedTempDir, files[0]);
+        expect(readFileSync(filePath, "utf8")).toBe(systemPrompt);
+        expect(statSync(filePath).mode & 0o777).toBe(0o600);
+
+        const commandArg = args[args.indexOf("--command") + 1];
+        expect(commandArg).not.toContain(systemPrompt);
+        expect(commandArg).toContain(filePath);
+      }
+      return originalExec(command, args, options);
+    };
+
+    await coordinator.spawn(baseSpawnOpts({ config: makeAgent({ systemPrompt }) }));
+
+    expect(capturedTempDir).toBeDefined();
+    expect(existsSync(capturedTempDir as string)).toBe(false);
+  });
+
+  it("removes the prompt temp file when a prerequisite check fails before terminal creation", async () => {
+    const cli = new FakeOrcaCli();
+    const controller = new AbortController();
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      if (args[0] === "worktree" && args[1] === "current") {
+        controller.abort();
+      }
+      return originalExec(command, args, options);
+    };
+    const coordinator = makeCoordinator(cli);
+
+    const before = new Set(readdirSync(tmpdir()).filter((n) => n.startsWith("pi-imps-orca-system-prompt-")));
+    await expect(coordinator.spawn(baseSpawnOpts({ signal: controller.signal }))).rejects.toThrow(/aborted/);
+    const leaked = readdirSync(tmpdir()).filter((n) => n.startsWith("pi-imps-orca-system-prompt-") && !before.has(n));
+    expect(leaked).toHaveLength(0);
+  });
+
+  it("removes the prompt temp file when terminal wait fails to become satisfied", async () => {
+    const cli = new FakeOrcaCli();
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      if (args[0] === "terminal" && args[1] === "wait") {
+        return {
+          stdout: JSON.stringify(ok({ wait: { satisfied: false, status: "timed-out" } })),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return originalExec(command, args, options);
+    };
+    const coordinator = makeCoordinator(cli);
+
+    const before = new Set(readdirSync(tmpdir()).filter((n) => n.startsWith("pi-imps-orca-system-prompt-")));
+    await expect(coordinator.spawn(baseSpawnOpts())).rejects.toThrow(/satisfied/);
+    const leaked = readdirSync(tmpdir()).filter((n) => n.startsWith("pi-imps-orca-system-prompt-") && !before.has(n));
+    expect(leaked).toHaveLength(0);
   });
 
   it("rejects when terminal wait reports satisfied: false", async () => {
