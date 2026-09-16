@@ -165,6 +165,7 @@ describe("buildOrcaLaunchArgv", () => {
       "--no-skills",
       "--no-prompt-templates",
       "--no-themes",
+      "--no-session",
       "-e",
       "/abs/pi-imps/src/index.ts",
       "-e",
@@ -189,6 +190,11 @@ describe("buildOrcaLaunchArgv", () => {
     const argv = buildOrcaLaunchArgv({ ...base, toolAllowlist: undefined });
     expect(argv).not.toContain("--tools");
     expect(argv.at(-1)).toBe("You are a coder.");
+  });
+
+  it("runs workers without persisting a Pi session", () => {
+    const argv = buildOrcaLaunchArgv({ ...base, toolAllowlist: undefined });
+    expect(argv).toContain("--no-session");
   });
 });
 

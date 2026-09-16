@@ -161,6 +161,7 @@ export function buildOrcaLaunchArgv(params: BuildOrcaLaunchArgvParams): string[]
     "--no-skills",
     "--no-prompt-templates",
     "--no-themes",
+    "--no-session",
     "-e",
     params.workerEntrypoint,
   ];
