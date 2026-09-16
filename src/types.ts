@@ -19,6 +19,14 @@ export interface ImpSnapshot {
   output?: string;
   error?: string;
   activity?: string; // live: "→ bash npm test"
+  /**
+   * False when turn/token telemetry is not available for this imp (e.g.
+   * Orca-dispatched imps, which report no telemetry over the orchestration
+   * protocol). Display code hides the stats suffix when this is explicitly
+   * false instead of showing misleading zero values. Undefined (the default)
+   * preserves existing local/test behavior — stats are shown.
+   */
+  telemetryAvailable?: boolean;
 }
 
 /** Full runtime imp — extends snapshot with non-serializable handles. */

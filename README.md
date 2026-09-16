@@ -155,7 +155,7 @@ Completion follows the same terminal-assistant semantics as local imps: a normal
 
 Every terminal pi-imps creates for an Orca-dispatched imp is explicitly closed when that imp completes, is dismissed, or the session ends — cleanup isn't left to Orca's `worker-release` alone (which does not close the terminal by itself).
 
-**Known limitation:** Orca workers currently expose no token/turn telemetry over the orchestration protocol, so `list_imps`/`wait` stats for Orca-dispatched imps stay at zero or unavailable. This means missing telemetry, not that the imp actually used zero turns or tokens.
+**Known limitation:** Orca workers currently expose no token/turn telemetry over the orchestration protocol, so `list_imps`/`wait` hide the turn/token stats suffix for Orca-dispatched imps instead of showing misleading zero values. LLM-visible JSON output is unaffected since it already omits stats.
 
 **Host integration extensions:** Any globally-installed extension whose top-level directory entry under `~/.pi/agent/extensions/` has a basename starting with `orca-` is always explicitly loaded for Orca-dispatched workers (in addition to the resolved tool/`additionalExtensions` extensions above), regardless of the resolved tool allowlist. This is separate from `additionalExtensions`: it is not configured in `imps.json`, it isn't restricted to the current agent or project, and it can't be disabled per-agent. It exists so Orca host-status/prefill/title integrations can attach to a worker unconditionally, without every project or agent needing to opt in via `additionalExtensions`.
 

@@ -548,6 +548,33 @@ describe("custom spawner (ImpSpawner injection)", () => {
     expect(json).toEqual([{ name: "imp-1", status: "completed", agent: "coder", output: "custom spawner result" }]);
   });
 
+  it("orca.enabled marks imp snapshots with telemetryAvailable: false, but JSON output is unaffected", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+
+    const summon = summonTool(
+      imps,
+      [testAgent],
+      namePool,
+      makeSettings({ orca: { enabled: true } }),
+      undefined,
+      async (opts) => {
+        opts.onComplete({ output: "orca result" });
+        return { abort: async () => {} };
+      },
+    );
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+
+    expect(result.details?.imps[0]?.telemetryAvailable).toBe(false);
+    expect(parseResult(result)).toEqual([
+      { name: "imp-1", status: "completed", agent: "coder", output: "orca result" },
+    ]);
+  });
+
   it("a rejected spawn maps its exact error message onto the failed imp", async () => {
     const imps = new Map();
     const namePool = makeNamePool();

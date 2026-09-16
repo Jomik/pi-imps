@@ -57,6 +57,7 @@ function impToSnapshot(imp: Imp): ImpSnapshot {
     output: imp.output,
     error: imp.error,
     activity: imp.activity,
+    telemetryAvailable: imp.telemetryAvailable,
   };
 }
 
@@ -152,6 +153,7 @@ export function summonTool(
         controller,
         done,
         resolveDone,
+        ...(settings.orca.enabled ? { telemetryAvailable: false } : {}),
       };
 
       imps.set(name, imp);

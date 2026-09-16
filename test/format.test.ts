@@ -161,6 +161,44 @@ describe("formatImpStatusDisplay", () => {
     expect(s).toContain("turn limit reached");
     expect(s).toContain("30\u27f3");
   });
+
+  it("telemetryAvailable: false hides the stats suffix on running rows", () => {
+    const imp = makeImp({
+      name: "orcaworker",
+      status: "running",
+      turns: 0,
+      tokens: { input: 0, output: 0 },
+      telemetryAvailable: false,
+    });
+    const s = formatImpStatusDisplay(imp, theme, 0);
+    expect(s).not.toContain("\u27f3");
+    expect(s.split("\n")[0]?.endsWith(" ")).toBe(false);
+  });
+
+  it("telemetryAvailable: false hides the stats suffix on completed rows", () => {
+    const imp = makeImp({
+      name: "orcaworker",
+      status: "completed",
+      turns: 0,
+      tokens: { input: 0, output: 0 },
+      telemetryAvailable: false,
+    });
+    const s = formatImpStatusDisplay(imp, theme, 0);
+    expect(s).not.toContain("\u27f3");
+  });
+
+  it("telemetryAvailable: false hides stats but keeps the turn-limit note on truncated rows", () => {
+    const imp = makeImp({
+      name: "orcaworker",
+      status: "truncated",
+      turns: 0,
+      tokens: { input: 0, output: 0 },
+      telemetryAvailable: false,
+    });
+    const s = formatImpStatusDisplay(imp, theme, 0);
+    expect(s).toContain("turn limit reached");
+    expect(s).not.toContain("\u27f3");
+  });
 });
 
 // --- formatSummonDisplay ---
@@ -276,5 +314,22 @@ describe("formatWaitDisplay", () => {
     expect(s).toContain("kevin");
     expect(s).toContain("turn limit reached");
     expect(s).not.toContain("finished first");
+  });
+
+  it("first mode with orca telemetryAvailable: false hides the stats suffix", () => {
+    const imps = [
+      makeImp({
+        name: "kevin",
+        agent: "cartographer",
+        status: "completed",
+        turns: 0,
+        tokens: { input: 0, output: 0 },
+        telemetryAvailable: false,
+      }),
+    ];
+    const s = formatWaitDisplay(imps, "first", theme);
+    expect(s).toContain("kevin");
+    expect(s).toContain("finished first");
+    expect(s).not.toContain("\u27f3");
   });
 });

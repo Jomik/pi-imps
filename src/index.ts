@@ -39,8 +39,8 @@ function initParentMode(pi: ExtensionAPI): (event: SessionStartEvent, ctx: Exten
         }
         // Orca worker telemetry (turn counts, token usage) is not available
         // over the orchestration protocol, so onTurnEnd/onUsageUpdate are
-        // intentionally left unwired here: Orca-dispatched imps report
-        // turns/tokens as zero.
+        // intentionally left unwired here: display code hides the stats
+        // suffix for Orca-dispatched imps instead of showing misleading zeros.
         return coordinator.spawn({
           name: opts.name,
           task: opts.task,
