@@ -27,16 +27,16 @@ function formatStats(imp: ImpSnapshot, theme: Theme): string {
 export function formatImpStatusDisplay(imp: ImpSnapshot, theme: Theme, animationFrame: number): string {
   const name = theme.fg("accent", imp.name);
   const base = `${name}${formatAgentSuffix(imp.agent, theme)}`;
-  const stats = formatStats(imp, theme);
+  const statsSuffix = imp.telemetryAvailable === false ? "" : ` ${formatStats(imp, theme)}`;
 
   switch (imp.status) {
     case "running": {
       const frame = SPINNER[animationFrame % SPINNER.length];
       const activity = imp.activity ?? theme.fg("dim", "idle");
-      return `${theme.fg("accent", frame)} ${base} ${stats}\n  ${activity}`;
+      return `${theme.fg("accent", frame)} ${base}${statsSuffix}\n  ${activity}`;
     }
     case "completed":
-      return `${theme.fg("success", "✓")} ${base} ${stats}`;
+      return `${theme.fg("success", "✓")} ${base}${statsSuffix}`;
     case "failed": {
       const error = imp.error || theme.fg("dim", "Imp failed with no error message");
       return `${theme.fg("error", "✗")} ${base}\n  ${theme.fg("error", error)}`;
@@ -44,7 +44,7 @@ export function formatImpStatusDisplay(imp: ImpSnapshot, theme: Theme, animation
     case "dismissed":
       return `${theme.fg("dim", "⊘")} ${base}`;
     case "truncated":
-      return `${theme.fg("warning", "!")} ${base} ${stats}\n  ${theme.fg("warning", "turn limit reached")}`;
+      return `${theme.fg("warning", "!")} ${base}${statsSuffix}\n  ${theme.fg("warning", "turn limit reached")}`;
     default:
       return `${base}: ${imp.status}`;
   }
@@ -103,7 +103,8 @@ export function formatWaitDisplay(
     if (winner && winner.status !== "running") {
       const name = theme.fg("accent", winner.name);
       const agent = formatAgentSuffix(winner.agent, theme);
-      return `${name}${agent} finished first ${formatStats(winner, theme)}`;
+      const stats = winner.telemetryAvailable === false ? "" : ` ${formatStats(winner, theme)}`;
+      return `${name}${agent} finished first${stats}`;
     }
   }
 

@@ -8,9 +8,30 @@ import type {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { formatImpStatusDisplay, formatSummonDisplay, formatSummonTaskPreview, formatWaitDisplay } from "./display.js";
-import { spawnImpSession, type ThinkingLevel } from "./session.js";
+import { type SpawnImpSessionOptions, spawnImpSession, type ThinkingLevel } from "./session.js";
 import { allImps, findImp, uncollectedImps } from "./state.js";
 import type { AgentConfig, Imp, ImpSettings, ImpSnapshot } from "./types.js";
+
+// ─── spawner injection ───────────────────────────────────────────────────────
+
+/** Options passed to an `ImpSpawner`: the same session-spawn inputs plus the generated imp name. */
+export type ImpSpawnerOptions = SpawnImpSessionOptions & { name: string };
+
+/** Result handle a spawner resolves with: the same abort shape `Imp.session` expects. */
+export interface ImpSpawnHandle {
+  abort(): Promise<void>;
+}
+
+/**
+ * Abstraction over how a summoned imp is actually launched. The default
+ * implementation spawns an in-process session via `spawnImpSession`; an
+ * injected implementation (e.g. routing through `OrcaCoordinator`) can
+ * replace it without changing summon/wait/dismiss/list_imps behavior.
+ */
+export type ImpSpawner = (opts: ImpSpawnerOptions) => Promise<ImpSpawnHandle>;
+
+/** Default spawner: delegates to the local in-process `spawnImpSession`. */
+const defaultSpawner: ImpSpawner = (opts) => spawnImpSession(opts);
 
 // ─── LLM result formatting (JSON) ────────────────────────────────────────────
 
@@ -36,6 +57,7 @@ function impToSnapshot(imp: Imp): ImpSnapshot {
     output: imp.output,
     error: imp.error,
     activity: imp.activity,
+    telemetryAvailable: imp.telemetryAvailable,
   };
 }
 
@@ -58,6 +80,7 @@ export function summonTool(
   namePool: { allocate(): string; release(name: string): void },
   settings: ImpSettings,
   getParentThinkingLevel: () => ThinkingLevel = () => "medium",
+  spawner: ImpSpawner = defaultSpawner,
 ): ToolDefinition<typeof SummonParams, SummonDetails | undefined> {
   return {
     name: "summon",
@@ -130,6 +153,7 @@ export function summonTool(
         controller,
         done,
         resolveDone,
+        ...(settings.orca.enabled ? { telemetryAvailable: false } : {}),
       };
 
       imps.set(name, imp);
@@ -147,7 +171,8 @@ export function summonTool(
         };
       }
 
-      spawnImpSession({
+      spawner({
+        name,
         task: params.task,
         config,
         cwd: ctx.cwd,
