@@ -223,7 +223,7 @@ export interface PrepareOrcaLaunchOptions {
   platform?: NodeJS.Platform;
   /** Abort signal checked before/after each prerequisite check and around `loader.reload()` (itself not cancellable). */
   signal?: AbortSignal;
-  /** Optional internal worker readiness marker path; supplied by the coordinator in a later step. */
+  /** Optional internal worker readiness marker path; supplied by the coordinator. */
   readyFile?: string;
 }
 
