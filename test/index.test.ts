@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockContext } from "./helpers/index.js";
@@ -61,11 +64,15 @@ describe("factory execution (before session_start)", () => {
     expect(pi.getFlag).not.toHaveBeenCalled();
   });
 
-  it("registers only the two custom flags and a single bootstrap session_start handler; no tools or commands yet", () => {
+  it("registers only the three custom flags and a single bootstrap session_start handler; no tools or commands yet", () => {
     const { pi, handlers, registerTool, registerCommand, registerFlag } = createMockPi(false);
     extensionFactory(pi);
 
-    expect(registerFlag).toHaveBeenCalledTimes(2);
+    expect(registerFlag).toHaveBeenCalledTimes(3);
+    expect(registerFlag).toHaveBeenCalledWith(
+      "imp-ready-file",
+      expect.objectContaining({ type: "string", default: "" }),
+    );
     expect(registerFlag).toHaveBeenCalledWith("is-imp", expect.objectContaining({ type: "boolean", default: false }));
     expect(registerFlag).toHaveBeenCalledWith(
       "imp-turn-limit",
@@ -84,6 +91,7 @@ describe("factory execution (before session_start)", () => {
       if (!flagsAvailable) throw new Error("custom flag values are not available yet");
       if (name === "is-imp") return true;
       if (name === "imp-turn-limit") return "30";
+      if (name === "imp-ready-file") return "";
       return undefined;
     });
     const pi = {
@@ -107,6 +115,7 @@ describe("factory execution (before session_start)", () => {
     startSession(handlers);
 
     expect(registerTool).not.toHaveBeenCalled();
+    expect(getFlag).toHaveBeenCalledWith("imp-ready-file");
   });
 });
 
@@ -170,6 +179,62 @@ describe("ordinary pi-imps extension behavior", () => {
 });
 
 describe("imp worker mode (is-imp flag)", () => {
+  it("creates a private empty readiness marker after worker hooks, only on first session_start", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-imps-ready-"));
+    const marker = join(dir, "ready");
+    try {
+      const { pi, handlers } = createMockPi(true, { "imp-ready-file": marker });
+      extensionFactory(pi);
+      expect(existsSync(marker)).toBe(false);
+      startSession(handlers);
+      expect(handlers.has("agent_settled")).toBe(true);
+      expect(readFileSync(marker)).toHaveLength(0);
+      expect(statSync(marker).mode & 0o777).toBe(0o600);
+      rmSync(marker);
+      startSession(handlers, "reload");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not create a marker when the flag is absent or mode is parent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-imps-ready-"));
+    try {
+      const marker = join(dir, "ready");
+      for (const [isImp, flags] of [
+        [true, {}],
+        [false, { "imp-ready-file": marker }],
+      ] as const) {
+        const { pi, handlers } = createMockPi(isImp, flags);
+        extensionFactory(pi);
+        startSession(handlers);
+        expect(existsSync(marker)).toBe(false);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid paths and existing markers instead of claiming readiness", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-imps-ready-"));
+    try {
+      for (const path of [" ", "relative/ready"]) {
+        const { pi, handlers } = createMockPi(true, { "imp-ready-file": path });
+        extensionFactory(pi);
+        expect(() => startSession(handlers)).toThrow(/imp-ready-file/);
+      }
+      const marker = join(dir, "ready");
+      writeFileSync(marker, "existing");
+      const { pi, handlers } = createMockPi(true, { "imp-ready-file": marker });
+      extensionFactory(pi);
+      expect(() => startSession(handlers)).toThrow(/Failed to create Orca worker readiness marker/);
+      expect(readFileSync(marker, "utf8")).toBe("existing");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("registers the is-imp flag", () => {
     const { pi, registerFlag } = createMockPi(true);
     extensionFactory(pi);
@@ -461,12 +526,13 @@ ${task}`;
       };
     }
 
-    it("registers both custom flags at factory time", () => {
+    it("registers all custom flags at factory time", () => {
       const { pi, registerFlag } = createMockPi(true);
       extensionFactory(pi);
 
       expect(registerFlag).toHaveBeenCalledWith("is-imp", expect.objectContaining({ type: "boolean" }));
       expect(registerFlag).toHaveBeenCalledWith("imp-turn-limit", expect.objectContaining({ type: "string" }));
+      expect(registerFlag).toHaveBeenCalledWith("imp-ready-file", expect.objectContaining({ type: "string" }));
     });
 
     it("fails worker startup on an invalid --imp-turn-limit at session_start, not at factory time", () => {

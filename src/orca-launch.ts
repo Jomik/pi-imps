@@ -147,6 +147,7 @@ export interface BuildOrcaLaunchArgvParams {
   thinkingLevel: string;
   systemPrompt: string;
   toolAllowlist: string[] | undefined;
+  readyFile?: string;
 }
 
 /**
@@ -182,6 +183,13 @@ export function buildOrcaLaunchArgv(params: BuildOrcaLaunchArgvParams): string[]
     params.systemPrompt,
   );
 
+  if (params.readyFile !== undefined) {
+    if (!params.readyFile.trim() || !isAbsolute(params.readyFile)) {
+      throw new Error("Orca worker readiness marker must be a nonempty absolute path");
+    }
+    argv.push("--imp-ready-file", params.readyFile);
+  }
+
   if (params.toolAllowlist !== undefined) {
     argv.push("--tools", params.toolAllowlist.join(","));
   }
@@ -215,6 +223,8 @@ export interface PrepareOrcaLaunchOptions {
   platform?: NodeJS.Platform;
   /** Abort signal checked before/after each prerequisite check and around `loader.reload()` (itself not cancellable). */
   signal?: AbortSignal;
+  /** Optional internal worker readiness marker path; supplied by the coordinator in a later step. */
+  readyFile?: string;
 }
 
 /**
@@ -273,6 +283,7 @@ export async function prepareOrcaLaunch(opts: PrepareOrcaLaunchOptions): Promise
     thinkingLevel,
     systemPrompt: opts.config.systemPrompt,
     toolAllowlist,
+    readyFile: opts.readyFile,
   });
 
   return {

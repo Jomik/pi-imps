@@ -192,6 +192,29 @@ describe("buildOrcaLaunchArgv", () => {
     expect(argv.at(-1)).toBe("You are a coder.");
   });
 
+  it("passes only an optional absolute readiness path, never prompt text, as the ready flag", () => {
+    const path = "/private/prompt dir/ready";
+    const argv = buildOrcaLaunchArgv({
+      ...base,
+      systemPrompt: "/private/prompt dir/system-prompt",
+      toolAllowlist: undefined,
+      readyFile: path,
+    });
+    expect(argv.slice(argv.indexOf("--imp-ready-file"), argv.indexOf("--imp-ready-file") + 2)).toEqual([
+      "--imp-ready-file",
+      path,
+    ]);
+    expect(argv.filter((token) => token === path)).toHaveLength(1);
+    expect(argv).not.toContain("You are a coder.");
+    expect(buildOrcaLaunchArgv({ ...base, toolAllowlist: undefined })).not.toContain("--imp-ready-file");
+    expect(() => buildOrcaLaunchArgv({ ...base, toolAllowlist: undefined, readyFile: "relative" })).toThrow(
+      /absolute path/,
+    );
+    expect(() => buildOrcaLaunchArgv({ ...base, toolAllowlist: undefined, readyFile: "" })).toThrow(
+      /nonempty absolute path/,
+    );
+  });
+
   it("runs workers without persisting a Pi session", () => {
     const argv = buildOrcaLaunchArgv({ ...base, toolAllowlist: undefined });
     expect(argv).toContain("--no-session");
@@ -870,6 +893,25 @@ describe("prepareOrcaLaunch", () => {
   });
 
   // ── worker entrypoint + full command shape ────────────────────────────
+
+  it("threads an optional readiness path into the command without leaking the prompt body", async () => {
+    const readyFile = join(cwd, "ready");
+    const promptPath = join(cwd, "system-prompt");
+    const plan = await prepareOrcaLaunch({
+      cwd,
+      config: makeAgent({ systemPrompt: promptPath }),
+      parentModel,
+      parentThinkingLevel: "low",
+      modelRegistry: makeModelRegistry([parentModel]),
+      settings: makeSettings(),
+      exec: makeExec(),
+      platform: "linux",
+      readyFile,
+    });
+    expect(plan.argv.slice(plan.argv.indexOf("--imp-ready-file"))).toEqual(["--imp-ready-file", readyFile]);
+    expect(plan.command).toContain(`'--imp-ready-file' '${readyFile}'`);
+    expect(plan.command).not.toContain("You are a coder.");
+  });
 
   it("resolves the internal worker entrypoint to an absolute src/index.ts path", async () => {
     const exec = makeExec();

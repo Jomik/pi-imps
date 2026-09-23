@@ -1,3 +1,5 @@
+import { closeSync, openSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { type AgentDiagnostic, buildAgentsBlock, discoverAgents } from "./agents.js";
 import { createImpsCommand } from "./command.js";
@@ -139,6 +141,11 @@ export default function (pi: ExtensionAPI): void {
     type: "string",
     default: "30",
   });
+  pi.registerFlag("imp-ready-file", {
+    description: "Internal Orca worker readiness marker path (only used with --is-imp)",
+    type: "string",
+    default: "",
+  });
 
   // Pi's custom flag values are only available once the CLI has finished
   // parsing; reading `getFlag` during factory execution can observe stale or
@@ -158,6 +165,17 @@ export default function (pi: ExtensionAPI): void {
         isWorker = true;
         const turnLimit = parseImpTurnLimit(pi.getFlag("imp-turn-limit") as string | undefined);
         initOrcaWorker(pi, turnLimit);
+        const readyFile = pi.getFlag("imp-ready-file");
+        if (readyFile !== undefined && readyFile !== "") {
+          if (typeof readyFile !== "string" || !readyFile.trim() || !isAbsolute(readyFile)) {
+            throw new Error("--imp-ready-file must be a nonempty absolute path");
+          }
+          try {
+            closeSync(openSync(readyFile, "wx", 0o600));
+          } catch (err) {
+            throw new Error(`Failed to create Orca worker readiness marker: ${String(err)}`);
+          }
+        }
         return;
       }
 
