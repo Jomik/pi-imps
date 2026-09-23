@@ -236,6 +236,8 @@ describe("buildOrcaLaunchArgv", () => {
     "imp-ready-file",
     "tools",
     "help",
+    "offline",
+    "api-key",
   ])("rejects an unsafe or reserved direct-call flag: %s", (name) => {
     expect(() => buildOrcaLaunchArgv({ ...base, toolAllowlist: undefined, impFlags: [name] })).toThrow(/impFlags/);
   });

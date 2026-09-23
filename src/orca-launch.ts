@@ -3,7 +3,7 @@ import { readdirSync } from "node:fs";
 import { extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ModelRegistry, parseArgs } from "@earendil-works/pi-coding-agent";
 import type { OrcaExecFn } from "./orca.js";
 import {
   buildImpResourceLoader,
@@ -157,29 +157,8 @@ export interface BuildOrcaLaunchArgvParams {
   impFlags?: readonly string[];
 }
 
-/** Pi core and pi-imps worker switches must not be shadowed by extension flags. */
-const RESERVED_WORKER_FLAGS = new Set([
-  "no-extensions",
-  "no-skills",
-  "no-prompt-templates",
-  "no-themes",
-  "no-session",
-  "is-imp",
-  "imp-turn-limit",
-  "imp-ready-file",
-  "model",
-  "thinking",
-  "system-prompt",
-  "tools",
-  "help",
-  "version",
-  "continue",
-  "resume",
-  "session",
-  "print",
-  "json",
-  "extension",
-]);
+/** pi-imps worker switches must not be shadowed by extension flags. Pi core switches are checked with its public parser. */
+const RESERVED_WORKER_FLAGS = new Set(["is-imp", "imp-turn-limit", "imp-ready-file"]);
 
 /**
  * Build the exact `pi` argv for an Orca imp launch. An explicit tool allowlist
@@ -226,7 +205,12 @@ export function buildOrcaLaunchArgv(params: BuildOrcaLaunchArgvParams): string[]
   }
 
   for (const name of new Set(params.impFlags ?? [])) {
-    if (typeof name !== "string" || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name) || RESERVED_WORKER_FLAGS.has(name)) {
+    if (
+      typeof name !== "string" ||
+      !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name) ||
+      RESERVED_WORKER_FLAGS.has(name) ||
+      !parseArgs([`--${name}`, "pi-imps-flag-check"]).unknownFlags.has(name)
+    ) {
       throw new Error(`impFlags: invalid or reserved Orca worker flag "${name}"`);
     }
     argv.push(`--${name}`);
