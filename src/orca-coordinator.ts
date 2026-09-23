@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -55,6 +55,36 @@ const MAX_ERROR_LENGTH = 500;
 
 /** Prefix for the private temp directory created to hold one spawn's system-prompt file. */
 const SYSTEM_PROMPT_TEMP_PREFIX = "pi-imps-orca-system-prompt-";
+const STARTUP_TIMEOUT_MS = 60_000;
+
+/** Wait for the worker's first-session marker, not the shell's idle state. */
+async function waitForReadyFile(path: string, deadline: number, signal: AbortSignal): Promise<void> {
+  while (true) {
+    signal.throwIfAborted();
+    try {
+      if ((await stat(path)).isFile()) return;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("Orca Pi startup timed out waiting for worker readiness marker.");
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        },
+        Math.min(50, remaining),
+      );
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new Error("Orca Pi startup aborted while waiting for worker readiness marker."));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+  }
+}
 
 interface SystemPromptTempFile {
   /** Absolute path to the written system-prompt file, passed to `--system-prompt` in place of the prompt content. */
@@ -258,7 +288,9 @@ export class OrcaCoordinator {
     let capturedDispatchId: string | undefined;
     try {
       promptTempFile = await writeSystemPromptTempFile(opts.config.systemPrompt);
+      const readyFile = join(promptTempFile.dir, "worker-ready");
       const plan = await prepareOrcaLaunch({
+        readyFile,
         cwd: opts.cwd,
         config: { ...opts.config, systemPrompt: promptTempFile.path },
         parentModel: opts.parentModel,
@@ -280,20 +312,54 @@ export class OrcaCoordinator {
       );
       terminalHandle = requireNonEmptyString(terminalResult.terminal?.handle, "terminal create");
 
-      opts.onActivity("waiting for Pi");
-      const waitResult = await execOrca<TerminalWaitResult>(
-        this.exec,
-        ["terminal", "wait", "--terminal", terminalHandle, "--for", "tui-idle", "--timeout-ms", "60000", "--json"],
-        "terminal wait",
-        opts.signal,
-      );
-      if (waitResult.wait?.satisfied !== true) {
-        throw new Error(
-          boundedError(`Orca terminal wait did not become satisfied (status: ${String(waitResult.wait?.status)})`),
+      // Both startup gates share the same deadline, starting at terminal creation.
+      const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+      const startupController = new AbortController();
+      const onAbort = () => startupController.abort();
+      opts.signal.addEventListener("abort", onAbort, { once: true });
+      if (opts.signal.aborted) onAbort();
+      const timer = setTimeout(() => startupController.abort(), STARTUP_TIMEOUT_MS);
+      try {
+        opts.onActivity("waiting for Pi");
+        await waitForReadyFile(readyFile, deadline, startupController.signal);
+        startupController.signal.throwIfAborted();
+        const remaining = Math.ceil(deadline - Date.now());
+        if (remaining <= 0) throw new Error("Orca Pi startup timed out before terminal wait.");
+        const waitResult = await execOrca<TerminalWaitResult>(
+          this.exec,
+          [
+            "terminal",
+            "wait",
+            "--terminal",
+            terminalHandle,
+            "--for",
+            "tui-idle",
+            "--timeout-ms",
+            String(remaining),
+            "--json",
+          ],
+          "terminal wait",
+          startupController.signal,
         );
+        startupController.signal.throwIfAborted();
+        if (Date.now() >= deadline) throw new Error("Orca Pi startup timed out during terminal wait.");
+        if (waitResult.wait?.satisfied !== true) {
+          throw new Error(
+            boundedError(`Orca terminal wait did not become satisfied (status: ${String(waitResult.wait?.status)})`),
+          );
+        }
+      } catch (err) {
+        if (opts.signal.aborted) throw new Error("Orca Pi startup aborted.");
+        if (Date.now() >= deadline || startupController.signal.aborted) {
+          throw new Error("Orca Pi startup timed out waiting for worker readiness and terminal idle.");
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+        opts.signal.removeEventListener("abort", onAbort);
       }
 
-      // Pi has finished loading the temp system-prompt file by now; remove it immediately.
+      // Pi has loaded the prompt and signaled worker readiness; remove both private files before dispatch.
       await cleanupPromptTempFile();
 
       opts.onActivity("dispatching");

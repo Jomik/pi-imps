@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -71,6 +71,8 @@ class FakeOrcaCli {
   terminalSeq = 0;
   taskSeq = 0;
   dispatchSeq = 0;
+  autoReady = true;
+  readyFiles: string[] = [];
 
   runId: string | undefined;
   closedTerminals: string[] = [];
@@ -120,11 +122,19 @@ class FakeOrcaCli {
 
     if (group === "terminal" && action === "create") {
       const handle = `handle_${++this.terminalSeq}`;
+      const command = args[args.indexOf("--command") + 1];
+      const readyFile = command.match(/'--imp-ready-file' '([^']+)'/)?.[1];
+      expect(readyFile).toBeDefined();
+      this.readyFiles.push(readyFile as string);
+      if (this.autoReady) writeFileSync(readyFile as string, "", { mode: 0o600 });
       return { stdout: JSON.stringify(ok({ terminal: { handle } })), stderr: "", code: 0 };
     }
 
     if (group === "terminal" && action === "wait") {
-      expect(args).toEqual(expect.arrayContaining(["--for", "tui-idle", "--timeout-ms", "60000"]));
+      const timeout = Number(args[args.indexOf("--timeout-ms") + 1]);
+      expect(timeout).toBeGreaterThan(0);
+      expect(timeout).toBeLessThanOrEqual(60_000);
+      expect(args).toEqual(expect.arrayContaining(["--for", "tui-idle"]));
       return { stdout: JSON.stringify(ok({ wait: { satisfied: true, status: "idle" } })), stderr: "", code: 0 };
     }
 
@@ -337,9 +347,9 @@ describe("OrcaCoordinator.spawn", () => {
     await coordinator.spawn(baseSpawnOpts({ name: "imp-a" }));
 
     const waitCall = execSpy.mock.calls.find((c) => c[1][0] === "terminal" && c[1][1] === "wait");
-    expect(waitCall?.[1]).toEqual(
-      expect.arrayContaining(["--terminal", "handle_1", "--for", "tui-idle", "--timeout-ms", "60000"]),
-    );
+    expect(waitCall?.[1]).toEqual(expect.arrayContaining(["--terminal", "handle_1", "--for", "tui-idle"]));
+    expect(Number(waitCall?.[1][waitCall[1].indexOf("--timeout-ms") + 1])).toBeGreaterThan(0);
+    expect(Number(waitCall?.[1][waitCall[1].indexOf("--timeout-ms") + 1])).toBeLessThanOrEqual(60_000);
 
     const taskCall = execSpy.mock.calls.find((c) => c[1][0] === "orchestration" && c[1][1] === "task-create");
     expect(taskCall?.[1]).toEqual(expect.arrayContaining(["--task-title", "imp-a"]));
@@ -374,6 +384,14 @@ describe("OrcaCoordinator.spawn", () => {
         const commandArg = args[args.indexOf("--command") + 1];
         expect(commandArg).not.toContain(systemPrompt);
         expect(commandArg).toContain(filePath);
+        expect(commandArg).toContain("--imp-ready-file");
+      }
+      if (args[0] === "terminal" && args[1] === "wait") {
+        expect(capturedTempDir && existsSync(capturedTempDir)).toBe(true);
+        expect(existsSync(cli.readyFiles[0])).toBe(true);
+      }
+      if (args[0] === "orchestration" && args[1] === "task-create") {
+        expect(capturedTempDir && existsSync(capturedTempDir)).toBe(false);
       }
       return originalExec(command, args, options);
     };
@@ -382,6 +400,117 @@ describe("OrcaCoordinator.spawn", () => {
 
     expect(capturedTempDir).toBeDefined();
     expect(existsSync(capturedTempDir as string)).toBe(false);
+  });
+
+  it("does not wait on shell idle or dispatch before the worker marker exists", async () => {
+    const cli = new FakeOrcaCli();
+    cli.autoReady = false;
+    const coordinator = makeCoordinator(cli);
+    const calls = vi.spyOn(cli, "exec");
+    const spawning = coordinator.spawn(baseSpawnOpts());
+    await vi.waitFor(() => expect(cli.readyFiles).toHaveLength(1));
+    expect(existsSync(cli.readyFiles[0])).toBe(false);
+    expect(
+      calls.mock.calls.some((c) => c[1][1] === "wait" || c[1][1] === "task-create" || c[1][1] === "worker-start"),
+    ).toBe(false);
+    writeFileSync(cli.readyFiles[0], "", { mode: 0o600 });
+    const handle = await spawning;
+    expect(cli.taskSeq).toBe(1);
+    expect(cli.dispatchSeq).toBe(1);
+    await handle.abort();
+    await coordinator.shutdown();
+  });
+
+  it("shares a 60-second deadline and passes only the remaining time to terminal wait", async () => {
+    const cli = new FakeOrcaCli();
+    cli.autoReady = false;
+    const coordinator = makeCoordinator(cli);
+    const realNow = Date.now;
+    let elapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + elapsed);
+    const calls = vi.spyOn(cli, "exec");
+    try {
+      const spawning = coordinator.spawn(baseSpawnOpts());
+      await vi.waitFor(() => expect(cli.readyFiles).toHaveLength(1));
+      elapsed = 25_000;
+      writeFileSync(cli.readyFiles[0], "", { mode: 0o600 });
+      const handle = await spawning;
+      const wait = calls.mock.calls.find((c) => c[1][1] === "wait")?.[1];
+      expect(wait).toBeDefined();
+      const remaining = Number(wait?.[wait.indexOf("--timeout-ms") + 1]);
+      expect(remaining).toBeGreaterThan(0);
+      expect(remaining).toBeLessThanOrEqual(35_000);
+      await handle.abort();
+      await coordinator.shutdown();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("times out without dispatch and removes the prompt and terminal when the marker is missing", async () => {
+    const cli = new FakeOrcaCli();
+    cli.autoReady = false;
+    const coordinator = makeCoordinator(cli);
+    const realNow = Date.now;
+    let elapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + elapsed);
+    try {
+      const spawning = coordinator.spawn(baseSpawnOpts());
+      // Attach rejection handling before moving the clock past the deadline.
+      const outcome = spawning.then(
+        () => "unexpected success",
+        (err: Error) => err.message,
+      );
+      await vi.waitFor(() => expect(cli.readyFiles).toHaveLength(1));
+      elapsed = 60_001;
+      expect(await outcome).toMatch(/startup timed out/);
+      expect(existsSync(cli.readyFiles[0])).toBe(false);
+      expect(cli.closedTerminals).toEqual(["handle_1"]);
+      expect(cli.taskSeq).toBe(0);
+      expect(cli.dispatchSeq).toBe(0);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("does not dispatch if terminal idle returns after the shared deadline", async () => {
+    const cli = new FakeOrcaCli();
+    const coordinator = makeCoordinator(cli);
+    const realNow = Date.now;
+    let elapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + elapsed);
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      const result = await originalExec(command, args, options);
+      if (args[0] === "terminal" && args[1] === "wait") elapsed = 60_001;
+      return result;
+    };
+    try {
+      await expect(coordinator.spawn(baseSpawnOpts())).rejects.toThrow(/startup timed out/);
+      expect(existsSync(cli.readyFiles[0])).toBe(false);
+      expect(cli.closedTerminals).toEqual(["handle_1"]);
+      expect(cli.taskSeq).toBe(0);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("aborts a marker wait promptly and cleans up without dispatch", async () => {
+    const cli = new FakeOrcaCli();
+    cli.autoReady = false;
+    const controller = new AbortController();
+    const coordinator = makeCoordinator(cli);
+    const spawning = coordinator.spawn(baseSpawnOpts({ signal: controller.signal }));
+    const outcome = spawning.then(
+      () => "unexpected success",
+      (err: Error) => err.message,
+    );
+    await vi.waitFor(() => expect(cli.readyFiles).toHaveLength(1));
+    controller.abort();
+    expect(await outcome).toMatch(/startup aborted/);
+    expect(existsSync(cli.readyFiles[0])).toBe(false);
+    expect(cli.closedTerminals).toEqual(["handle_1"]);
+    expect(cli.taskSeq).toBe(0);
   });
 
   it("removes the prompt temp file when a prerequisite check fails before terminal creation", async () => {
