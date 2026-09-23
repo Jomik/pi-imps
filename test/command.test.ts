@@ -70,7 +70,7 @@ function makeSettings(agentTools: Record<string, string[]> = {}, toolAllowlist?:
   for (const [k, v] of Object.entries(agentTools)) {
     agents[k] = { tools: v };
   }
-  return { turnLimit: 30, toolAllowlist, additionalExtensions: [], agents, orca: { enabled: false } };
+  return { turnLimit: 30, toolAllowlist, additionalExtensions: [], impFlags: [], agents, orca: { enabled: false } };
 }
 
 /**

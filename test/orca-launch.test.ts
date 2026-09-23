@@ -107,6 +107,7 @@ function makeSettings(overrides: Partial<ImpSettings> = {}): ImpSettings {
     turnLimit: 30,
     toolAllowlist: undefined,
     additionalExtensions: [],
+    impFlags: [],
     agents: {},
     orca: { enabled: true },
     ...overrides,

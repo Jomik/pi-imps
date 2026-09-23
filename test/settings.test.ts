@@ -10,6 +10,7 @@ describe("parseImpSettings", () => {
     expect(settings.turnLimit).toBe(30);
     expect(settings.toolAllowlist).toBeUndefined();
     expect(settings.additionalExtensions).toEqual([]);
+    expect(settings.impFlags).toEqual([]);
     expect(settings.agents).toEqual({});
   });
 
@@ -18,6 +19,7 @@ describe("parseImpSettings", () => {
     expect(settings.turnLimit).toBe(30);
     expect(settings.toolAllowlist).toBeUndefined();
     expect(settings.additionalExtensions).toEqual([]);
+    expect(settings.impFlags).toEqual([]);
     expect(settings.agents).toEqual({});
   });
 
@@ -36,6 +38,40 @@ describe("parseImpSettings", () => {
       additionalExtensions: ["pi-sandbox"],
     });
     expect(settings.additionalExtensions).toEqual(["pi-sandbox"]);
+  });
+
+  it("accepts boolean flag names and deduplicates in first-seen order", () => {
+    expect(parseImpSettings({ impFlags: ["policy-check", "audit2", "policy-check", "review-mode"] }).impFlags).toEqual([
+      "policy-check",
+      "audit2",
+      "review-mode",
+    ]);
+  });
+
+  it.each([null, false, "policy-check", {}, 1, undefined])("rejects a present non-array impFlags: %s", (value) => {
+    expect(() => parseImpSettings({ impFlags: value })).toThrow(/impFlags.*array/);
+  });
+
+  it.each([
+    "",
+    "--policy-check",
+    "Policy-check",
+    "policy_check",
+    "-policy",
+    "policy-",
+    "policy--check",
+    "policy check",
+    "policy=true",
+    "policy;echo",
+    "policy\ncheck",
+    "1policy",
+    null,
+    1,
+    false,
+    {},
+    ["policy"],
+  ])("rejects an invalid impFlags entry: %s", (value) => {
+    expect(() => parseImpSettings({ impFlags: ["valid-flag", value] })).toThrow(/impFlags.*entry 1/);
   });
 
   it("ignores invalid turnLimit (negative)", () => {
@@ -175,6 +211,7 @@ describe("loadImpSettings", () => {
     expect(settings.turnLimit).toBe(30);
     expect(settings.toolAllowlist).toBeUndefined();
     expect(settings.additionalExtensions).toEqual([]);
+    expect(settings.impFlags).toEqual([]);
   });
 
   it("throws when imps.json contains invalid JSON", () => {
@@ -209,6 +246,18 @@ describe("loadImpSettings", () => {
     writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["run_tests"] } } }));
     const settings = loadImpSettings(tmpDir);
     expect(settings.agents).toEqual({ mason: { tools: ["run_tests"] } });
+  });
+
+  it("loads and deduplicates impFlags from global imps.json", () => {
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ impFlags: ["policy-check", "audit", "policy-check"] }));
+    expect(loadImpSettings(tmpDir).impFlags).toEqual(["policy-check", "audit"]);
+  });
+
+  it("fails settings loading for malformed impFlags instead of dropping a requested policy", () => {
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ turnLimit: 10, impFlags: ["policy-check", "--unsafe"] }));
+    expect(() => loadImpSettings(tmpDir)).toThrow(/impFlags.*entry 1/);
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ impFlags: "policy-check" }));
+    expect(() => loadImpSettings(tmpDir)).toThrow(/impFlags.*array/);
   });
 
   it("reads orca.enabled from imps.json", () => {

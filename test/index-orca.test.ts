@@ -14,6 +14,7 @@ const loadImpSettingsMock = vi.fn((_agentDir?: string) => ({
   turnLimit: 30,
   toolAllowlist: undefined,
   additionalExtensions: [],
+  impFlags: [],
   agents: {},
   orca: { enabled: true },
 }));
@@ -105,6 +106,7 @@ beforeEach(() => {
     turnLimit: 30,
     toolAllowlist: undefined,
     additionalExtensions: [],
+    impFlags: [],
     agents: {},
     orca: { enabled: true },
   });
@@ -116,6 +118,7 @@ describe("orca disabled", () => {
       turnLimit: 30,
       toolAllowlist: undefined,
       additionalExtensions: [],
+      impFlags: [],
       agents: {},
       orca: { enabled: false },
     });

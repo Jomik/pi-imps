@@ -27,6 +27,12 @@
       "default": [],
       "description": "Extensions that always load on imp sessions regardless of tool filtering. Agent frontmatter cannot override this."
     },
+    "impFlags": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+      "default": [],
+      "description": "Names of boolean flags registered by extensions selected for each imp. No -- prefix or values; invalid flags fail settings loading, and unregistered or non-boolean flags fail imp launch. Applies to local and Orca imps."
+    },
     "agents": {
       "type": "object",
       "description": "Per-agent additive tool grants. Keys are agent names. Tools listed here are unioned with the effective base allowlist: agent frontmatter tools when present, otherwise global toolAllowlist.",

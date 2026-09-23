@@ -7,6 +7,7 @@ const DEFAULTS: ImpSettings = {
   turnLimit: 30,
   toolAllowlist: undefined,
   additionalExtensions: [],
+  impFlags: [],
   agents: {},
   orca: { enabled: false },
 };
@@ -32,11 +33,25 @@ export function parseImpSettings(block: Record<string, unknown> | undefined): Im
     ? (block.additionalExtensions as string[])
     : DEFAULTS.additionalExtensions;
 
+  const impFlags = Object.hasOwn(block, "impFlags") ? parseImpFlags(block.impFlags) : [];
   const agents = parseAgentsConfig(block.agents);
 
   const orca = parseOrcaConfig(block.orca);
 
-  return { turnLimit, toolAllowlist, additionalExtensions, agents, orca };
+  return { turnLimit, toolAllowlist, additionalExtensions, impFlags, agents, orca };
+}
+
+/** Reject malformed requested flags rather than silently dropping a policy. */
+function parseImpFlags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) throw new Error("Global imps.json 'impFlags' must be an array of boolean flag names");
+  for (const [index, name] of raw.entries()) {
+    if (typeof name !== "string" || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) {
+      throw new Error(
+        `Global imps.json 'impFlags' entry ${index} must be a lowercase hyphenated flag name (without --)`,
+      );
+    }
+  }
+  return [...new Set(raw as string[])];
 }
 
 /** Parse and validate the raw `orca` config object: only `enabled` (boolean), default false. */
