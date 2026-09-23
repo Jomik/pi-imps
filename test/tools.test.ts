@@ -40,7 +40,14 @@ const theme = {
 } as unknown as Theme;
 
 function makeSettings(): ImpSettings {
-  return { turnLimit: 30, toolAllowlist: undefined, additionalExtensions: [], agents: {} };
+  return {
+    turnLimit: 30,
+    toolAllowlist: undefined,
+    additionalExtensions: [],
+    impFlags: [],
+    agents: {},
+    orca: { enabled: false },
+  };
 }
 
 function parseResult(result: AgentToolResult<unknown>) {

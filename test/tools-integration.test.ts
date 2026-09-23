@@ -1,14 +1,16 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, Extension } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ImpSpawnerOptions } from "../src/tools.js";
 import type { AgentConfig, ImpSettings } from "../src/types.js";
 import { createMockContext, createMockSession, type MockSessionConfig } from "./helpers/index.js";
 
 // ─── Module-level mock ref ────────────────────────────────────────────────────
 
 const sessionRef: { current: ReturnType<typeof createMockSession> | null } = { current: null };
+const extensionsRef: { current: Extension[] } = { current: [] };
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const real = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
@@ -18,7 +20,14 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     createAgentSession: vi.fn(async () => ({ session: sessionRef.current!.session })),
     // Stub resource loader to avoid real I/O in integration tests
     DefaultResourceLoader: class {
+      constructor(private options: ConstructorParameters<typeof real.DefaultResourceLoader>[0]) {}
       async reload() {}
+      getExtensions() {
+        const base = { extensions: extensionsRef.current, errors: [] } as unknown as ReturnType<
+          InstanceType<typeof real.DefaultResourceLoader>["getExtensions"]
+        >;
+        return this.options.extensionsOverride?.(base) ?? base;
+      }
     },
   };
 });
@@ -36,7 +45,15 @@ function parseResult(r: AgentToolResult<unknown>) {
 }
 
 function makeSettings(overrides: Partial<ImpSettings> = {}): ImpSettings {
-  return { turnLimit: 30, toolAllowlist: undefined, additionalExtensions: [], agents: {}, ...overrides };
+  return {
+    turnLimit: 30,
+    toolAllowlist: undefined,
+    additionalExtensions: [],
+    impFlags: [],
+    agents: {},
+    orca: { enabled: false },
+    ...overrides,
+  };
 }
 
 const testAgent: AgentConfig = {
@@ -78,6 +95,7 @@ async function waitForPromptStart(mock: ReturnType<typeof createMockSession>, ti
 
 beforeEach(() => {
   sessionRef.current = null;
+  extensionsRef.current = [];
   vi.clearAllMocks();
   vi.mocked(createAgentSession).mockImplementation(
     // biome-ignore lint/style/noNonNullAssertion: set by installMock before spawn reaches createAgentSession
@@ -86,6 +104,60 @@ beforeEach(() => {
 });
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe("local imp flags", () => {
+  function registeredExtension(type: "boolean" | "string", tools: string[] = ["policy_tool"]): Extension {
+    return {
+      path: "/fake/policy.ts",
+      resolvedPath: "/fake/policy.ts",
+      tools: new Map(tools.map((name) => [name, {}])),
+      flags: new Map([["safe-mode", { name: "safe-mode", type, extensionPath: "/fake/policy.ts" }]]),
+    } as unknown as Extension;
+  }
+
+  async function launch(flags: string[], agent: AgentConfig = testAgent) {
+    const imps = new Map();
+    const mock = installMock({ totalTurns: 1 });
+    const ctx = createMockContext();
+    const summon = summonTool(imps, [agent], makeNamePool(), makeSettings({ impFlags: flags }));
+    await summon.execute(
+      "tc1",
+      { task: "analyze the codebase thoroughly", agent: agent.name },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const result = await waitTool(imps).execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    return { mock, result: parseResult(result) };
+  }
+
+  it("sets a selected extension's boolean flag before binding and prompting", async () => {
+    extensionsRef.current = [registeredExtension("boolean")];
+    const { mock, result } = await launch(["safe-mode"], { ...testAgent, tools: ["policy_tool"] });
+    expect(mock.controls.flagsAtBind?.get("safe-mode")).toBe(true);
+    expect(mock.controls.promptStarted).toBe(true);
+    expect(result[0].status).toBe("completed");
+  });
+
+  it("leaves no-flag sessions unchanged", async () => {
+    const { mock, result } = await launch([]);
+    expect(mock.controls.flagValues.size).toBe(0);
+    expect(result[0].status).toBe("completed");
+  });
+
+  it.each([
+    ["missing", [], testAgent, /safe-mode.*not registered by a selected extension/],
+    ["non-boolean", [registeredExtension("string")], testAgent, /safe-mode.*not a boolean flag/],
+    ["filtered out", [registeredExtension("boolean")], { ...testAgent, tools: [] }, /safe-mode.*selected extension/],
+  ])("rejects %s before worker creation or prompt", async (_case, extensions, agent, error) => {
+    extensionsRef.current = extensions;
+    const { mock, result } = await launch(["safe-mode"], agent);
+    expect(result[0].status).toBe("failed");
+    expect(result[0].error).toMatch(error);
+    expect(createAgentSession).not.toHaveBeenCalled();
+    expect(mock.controls.promptStarted).toBe(false);
+  });
+});
 
 describe("summon → wait integration", () => {
   it("completes with final output", async () => {
@@ -482,6 +554,138 @@ describe("project config tools", () => {
         tools: expect.arrayContaining(["read", "edit", "run_tests"]),
       }),
     );
+  });
+});
+
+describe("custom spawner (ImpSpawner injection)", () => {
+  it("receives the generated name plus all resolved parent inputs", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+
+    let resolveHandle!: () => void;
+    const handlePromise = new Promise<{ abort(): Promise<void> }>((resolve) => {
+      resolveHandle = () => resolve({ abort: async () => {} });
+    });
+
+    const spawner = vi.fn((_opts: ImpSpawnerOptions) => handlePromise);
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings(), () => "high", spawner);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+
+    expect(spawner).toHaveBeenCalledTimes(1);
+    const opts = spawner.mock.calls[0][0];
+    expect(opts.name).toBe("imp-1");
+    expect(opts.task).toBe("analyze the codebase thoroughly");
+    expect(opts.config).toEqual(testAgent);
+    expect(opts.cwd).toBe(ctx.cwd);
+    expect(opts.parentModel).toBe(ctx.model);
+    expect(opts.parentThinkingLevel).toBe("high");
+    expect(opts.modelRegistry).toBe(ctx.modelRegistry);
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+    expect(opts.settings).toEqual(makeSettings());
+    expect(typeof opts.onTurnEnd).toBe("function");
+    expect(typeof opts.onToolActivity).toBe("function");
+    expect(typeof opts.onUsageUpdate).toBe("function");
+    expect(typeof opts.onComplete).toBe("function");
+
+    resolveHandle();
+    await handlePromise;
+  });
+
+  it("successful completion via the injected spawner integrates with wait", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings(), undefined, async (opts) => {
+      opts.onComplete({ output: "custom spawner result" });
+      return { abort: async () => {} };
+    });
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    const json = parseResult(result);
+
+    expect(json).toEqual([{ name: "imp-1", status: "completed", agent: "coder", output: "custom spawner result" }]);
+  });
+
+  it("orca.enabled marks imp snapshots with telemetryAvailable: false, but JSON output is unaffected", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+
+    const summon = summonTool(
+      imps,
+      [testAgent],
+      namePool,
+      makeSettings({ orca: { enabled: true } }),
+      undefined,
+      async (opts) => {
+        opts.onComplete({ output: "orca result" });
+        return { abort: async () => {} };
+      },
+    );
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+
+    expect(result.details?.imps[0]?.telemetryAvailable).toBe(false);
+    expect(parseResult(result)).toEqual([
+      { name: "imp-1", status: "completed", agent: "coder", output: "orca result" },
+    ]);
+  });
+
+  it("a rejected spawn maps its exact error message onto the failed imp", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+
+    const spawner = vi.fn(async () => {
+      throw new Error("orca coordinator unavailable");
+    });
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings(), undefined, spawner);
+    const wait = waitTool(imps);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+    const result = await wait.execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    const json = parseResult(result);
+
+    expect(json[0].status).toBe("failed");
+    expect(json[0].error).toBe("orca coordinator unavailable");
+  });
+
+  it("dismiss-before-ready aborts the resolved handle without overwriting the dismissed status", async () => {
+    const imps = new Map();
+    const namePool = makeNamePool();
+    const ctx = createMockContext();
+
+    const abort = vi.fn(async () => {});
+    let resolveHandle!: (handle: { abort(): Promise<void> }) => void;
+    const handlePromise = new Promise<{ abort(): Promise<void> }>((resolve) => {
+      resolveHandle = resolve;
+    });
+    const spawner = vi.fn(() => handlePromise);
+
+    const summon = summonTool(imps, [testAgent], namePool, makeSettings(), undefined, spawner);
+    const dismiss = dismissTool(imps, namePool);
+
+    await summon.execute("tc1", { task: "analyze the codebase thoroughly", agent: "coder" }, undefined, undefined, ctx);
+
+    // Dismiss before the spawner's handle resolves.
+    await dismiss.execute("tc2", { name: "imp-1" }, undefined, undefined, ctx);
+
+    // Now let the spawn resolve — it must be aborted, not treated as a fresh session.
+    resolveHandle({ abort });
+    await handlePromise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(abort).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -19,6 +19,14 @@ export interface ImpSnapshot {
   output?: string;
   error?: string;
   activity?: string; // live: "→ bash npm test"
+  /**
+   * False when turn/token telemetry is not available for this imp (e.g.
+   * Orca-dispatched imps, which report no telemetry over the orchestration
+   * protocol). Display code hides the stats suffix when this is explicitly
+   * false instead of showing misleading zero values. Undefined (the default)
+   * preserves existing local/test behavior — stats are shown.
+   */
+  telemetryAvailable?: boolean;
 }
 
 /** Full runtime imp — extends snapshot with non-serializable handles. */
@@ -47,7 +55,7 @@ export interface AgentConfig {
   readonly filePath: string;
 }
 
-/** Extension settings under the "pi-imps" key in settings.json */
+/** Global imp settings from ~/.pi/agent/imps.json */
 export interface ImpSettings {
   /** Max turns before an imp is cut off. Default: 30 */
   turnLimit: number;
@@ -55,8 +63,12 @@ export interface ImpSettings {
   toolAllowlist: string[] | undefined;
   /** Extensions that always load on imp sessions regardless of tool filtering */
   additionalExtensions: string[];
+  /** Names of boolean extension flags requested for every imp. Default: none. */
+  impFlags: string[];
   /** Per-agent additive tool grants from global ~/.pi/agent/imps.json */
   agents: Record<string, { tools?: string[] }>;
+  /** Orca-backed external imp launches. Default: disabled (local in-process spawning). */
+  orca: { enabled: boolean };
 }
 
 /**

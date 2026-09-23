@@ -10,6 +10,7 @@ describe("parseImpSettings", () => {
     expect(settings.turnLimit).toBe(30);
     expect(settings.toolAllowlist).toBeUndefined();
     expect(settings.additionalExtensions).toEqual([]);
+    expect(settings.impFlags).toEqual([]);
     expect(settings.agents).toEqual({});
   });
 
@@ -18,6 +19,7 @@ describe("parseImpSettings", () => {
     expect(settings.turnLimit).toBe(30);
     expect(settings.toolAllowlist).toBeUndefined();
     expect(settings.additionalExtensions).toEqual([]);
+    expect(settings.impFlags).toEqual([]);
     expect(settings.agents).toEqual({});
   });
 
@@ -38,6 +40,40 @@ describe("parseImpSettings", () => {
     expect(settings.additionalExtensions).toEqual(["pi-sandbox"]);
   });
 
+  it("accepts boolean flag names and deduplicates in first-seen order", () => {
+    expect(parseImpSettings({ impFlags: ["policy-check", "audit2", "policy-check", "review-mode"] }).impFlags).toEqual([
+      "policy-check",
+      "audit2",
+      "review-mode",
+    ]);
+  });
+
+  it.each([null, false, "policy-check", {}, 1, undefined])("rejects a present non-array impFlags: %s", (value) => {
+    expect(() => parseImpSettings({ impFlags: value })).toThrow(/impFlags.*array/);
+  });
+
+  it.each([
+    "",
+    "--policy-check",
+    "Policy-check",
+    "policy_check",
+    "-policy",
+    "policy-",
+    "policy--check",
+    "policy check",
+    "policy=true",
+    "policy;echo",
+    "policy\ncheck",
+    "1policy",
+    null,
+    1,
+    false,
+    {},
+    ["policy"],
+  ])("rejects an invalid impFlags entry: %s", (value) => {
+    expect(() => parseImpSettings({ impFlags: ["valid-flag", value] })).toThrow(/impFlags.*entry 1/);
+  });
+
   it("ignores invalid turnLimit (negative)", () => {
     const settings = parseImpSettings({ turnLimit: -5 });
     expect(settings.turnLimit).toBe(30);
@@ -50,6 +86,11 @@ describe("parseImpSettings", () => {
 
   it("ignores invalid turnLimit (1, minimum is 2)", () => {
     const settings = parseImpSettings({ turnLimit: 1 });
+    expect(settings.turnLimit).toBe(30);
+  });
+
+  it("ignores invalid turnLimit (non-integer, 2.5) and falls back to default", () => {
+    const settings = parseImpSettings({ turnLimit: 2.5 });
     expect(settings.turnLimit).toBe(30);
   });
 
@@ -122,6 +163,36 @@ describe("parseImpSettings", () => {
     });
     expect(settings.agents.mason).toEqual({ tools: ["run_tests"] });
   });
+
+  // ── orca field ───────────────────────────────────────────
+
+  it("defaults orca.enabled to false when block is undefined", () => {
+    expect(parseImpSettings(undefined).orca).toEqual({ enabled: false });
+  });
+
+  it("defaults orca.enabled to false when orca is absent", () => {
+    expect(parseImpSettings({}).orca).toEqual({ enabled: false });
+  });
+
+  it("reads orca.enabled true", () => {
+    expect(parseImpSettings({ orca: { enabled: true } }).orca).toEqual({ enabled: true });
+  });
+
+  it("reads orca.enabled false", () => {
+    expect(parseImpSettings({ orca: { enabled: false } }).orca).toEqual({ enabled: false });
+  });
+
+  it("defaults orca.enabled to false when orca is not an object", () => {
+    expect(parseImpSettings({ orca: "yes" }).orca).toEqual({ enabled: false });
+    expect(parseImpSettings({ orca: [true] }).orca).toEqual({ enabled: false });
+    expect(parseImpSettings({ orca: null }).orca).toEqual({ enabled: false });
+  });
+
+  it("defaults orca.enabled to false when enabled is not a boolean", () => {
+    expect(parseImpSettings({ orca: { enabled: "true" } }).orca).toEqual({ enabled: false });
+    expect(parseImpSettings({ orca: { enabled: 1 } }).orca).toEqual({ enabled: false });
+    expect(parseImpSettings({ orca: {} }).orca).toEqual({ enabled: false });
+  });
 });
 
 describe("loadImpSettings", () => {
@@ -140,6 +211,7 @@ describe("loadImpSettings", () => {
     expect(settings.turnLimit).toBe(30);
     expect(settings.toolAllowlist).toBeUndefined();
     expect(settings.additionalExtensions).toEqual([]);
+    expect(settings.impFlags).toEqual([]);
   });
 
   it("throws when imps.json contains invalid JSON", () => {
@@ -174,6 +246,30 @@ describe("loadImpSettings", () => {
     writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ agents: { mason: { tools: ["run_tests"] } } }));
     const settings = loadImpSettings(tmpDir);
     expect(settings.agents).toEqual({ mason: { tools: ["run_tests"] } });
+  });
+
+  it("loads and deduplicates impFlags from global imps.json", () => {
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ impFlags: ["policy-check", "audit", "policy-check"] }));
+    expect(loadImpSettings(tmpDir).impFlags).toEqual(["policy-check", "audit"]);
+  });
+
+  it("fails settings loading for malformed impFlags instead of dropping a requested policy", () => {
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ turnLimit: 10, impFlags: ["policy-check", "--unsafe"] }));
+    expect(() => loadImpSettings(tmpDir)).toThrow(/impFlags.*entry 1/);
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ impFlags: "policy-check" }));
+    expect(() => loadImpSettings(tmpDir)).toThrow(/impFlags.*array/);
+  });
+
+  it("reads orca.enabled from imps.json", () => {
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ orca: { enabled: true } }));
+    const settings = loadImpSettings(tmpDir);
+    expect(settings.orca).toEqual({ enabled: true });
+  });
+
+  it("defaults orca.enabled to false when imps.json omits it", () => {
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ turnLimit: 10 }));
+    const settings = loadImpSettings(tmpDir);
+    expect(settings.orca).toEqual({ enabled: false });
   });
 
   it("ignores unknown fields via parseImpSettings validation", () => {

@@ -17,6 +17,8 @@ export interface MockSessionControls {
   promptStarted: boolean;
   promptResolved: boolean;
   promptRejected: boolean;
+  flagValues: Map<string, boolean | string>;
+  flagsAtBind: Map<string, boolean | string> | undefined;
   emitTurn(opts?: {
     usage?: { input: number; output: number };
     finalText?: string;
@@ -38,6 +40,7 @@ interface MockSessionSurface {
   abort(): Promise<void>;
   prompt(task: string): Promise<void>;
   state: { errorMessage?: string };
+  extensionRunner: { setFlagValue(name: string, value: boolean | string): void };
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -80,6 +83,8 @@ export function createMockSession(config: MockSessionConfig = {}): {
     promptStarted: false,
     promptResolved: false,
     promptRejected: false,
+    flagValues: new Map(),
+    flagsAtBind: undefined,
 
     async emitTurn(opts) {
       const usage = opts?.usage ?? config.perTurnUsage ?? { input: 10, output: 5 };
@@ -151,9 +156,14 @@ export function createMockSession(config: MockSessionConfig = {}): {
 
   const mockSession: MockSessionSurface = {
     state: {},
+    extensionRunner: {
+      setFlagValue(name, value) {
+        controls.flagValues.set(name, value);
+      },
+    },
 
     async bindExtensions(_bindings) {
-      // no-op
+      controls.flagsAtBind = new Map(controls.flagValues);
     },
 
     subscribe(cb) {

@@ -7,7 +7,9 @@ const DEFAULTS: ImpSettings = {
   turnLimit: 30,
   toolAllowlist: undefined,
   additionalExtensions: [],
+  impFlags: [],
   agents: {},
+  orca: { enabled: false },
 };
 
 /**
@@ -17,7 +19,13 @@ const DEFAULTS: ImpSettings = {
 export function parseImpSettings(block: Record<string, unknown> | undefined): ImpSettings {
   if (!block || typeof block !== "object") return { ...DEFAULTS };
 
-  const turnLimit = typeof block.turnLimit === "number" && block.turnLimit >= 2 ? block.turnLimit : DEFAULTS.turnLimit;
+  const turnLimit =
+    typeof block.turnLimit === "number" &&
+    Number.isFinite(block.turnLimit) &&
+    Number.isInteger(block.turnLimit) &&
+    block.turnLimit >= 2
+      ? block.turnLimit
+      : DEFAULTS.turnLimit;
 
   const toolAllowlist = Array.isArray(block.toolAllowlist) ? (block.toolAllowlist as string[]) : DEFAULTS.toolAllowlist;
 
@@ -25,9 +33,32 @@ export function parseImpSettings(block: Record<string, unknown> | undefined): Im
     ? (block.additionalExtensions as string[])
     : DEFAULTS.additionalExtensions;
 
+  const impFlags = Object.hasOwn(block, "impFlags") ? parseImpFlags(block.impFlags) : [];
   const agents = parseAgentsConfig(block.agents);
 
-  return { turnLimit, toolAllowlist, additionalExtensions, agents };
+  const orca = parseOrcaConfig(block.orca);
+
+  return { turnLimit, toolAllowlist, additionalExtensions, impFlags, agents, orca };
+}
+
+/** Reject malformed requested flags rather than silently dropping a policy. */
+function parseImpFlags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) throw new Error("Global imps.json 'impFlags' must be an array of boolean flag names");
+  for (const [index, name] of raw.entries()) {
+    if (typeof name !== "string" || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) {
+      throw new Error(
+        `Global imps.json 'impFlags' entry ${index} must be a lowercase hyphenated flag name (without --)`,
+      );
+    }
+  }
+  return [...new Set(raw as string[])];
+}
+
+/** Parse and validate the raw `orca` config object: only `enabled` (boolean), default false. */
+function parseOrcaConfig(raw: unknown): { enabled: boolean } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULTS.orca };
+  const entry = raw as Record<string, unknown>;
+  return { enabled: typeof entry.enabled === "boolean" ? entry.enabled : DEFAULTS.orca.enabled };
 }
 
 /** Parse and validate a raw agents config object. */
