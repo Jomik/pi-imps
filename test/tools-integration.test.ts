@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, Extension } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImpSpawnerOptions } from "../src/tools.js";
 import type { AgentConfig, ImpSettings } from "../src/types.js";
@@ -10,6 +10,7 @@ import { createMockContext, createMockSession, type MockSessionConfig } from "./
 // ─── Module-level mock ref ────────────────────────────────────────────────────
 
 const sessionRef: { current: ReturnType<typeof createMockSession> | null } = { current: null };
+const extensionsRef: { current: Extension[] } = { current: [] };
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const real = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
@@ -19,7 +20,14 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     createAgentSession: vi.fn(async () => ({ session: sessionRef.current!.session })),
     // Stub resource loader to avoid real I/O in integration tests
     DefaultResourceLoader: class {
+      constructor(private options: ConstructorParameters<typeof real.DefaultResourceLoader>[0]) {}
       async reload() {}
+      getExtensions() {
+        const base = { extensions: extensionsRef.current, errors: [] } as unknown as ReturnType<
+          InstanceType<typeof real.DefaultResourceLoader>["getExtensions"]
+        >;
+        return this.options.extensionsOverride?.(base) ?? base;
+      }
     },
   };
 });
@@ -87,6 +95,7 @@ async function waitForPromptStart(mock: ReturnType<typeof createMockSession>, ti
 
 beforeEach(() => {
   sessionRef.current = null;
+  extensionsRef.current = [];
   vi.clearAllMocks();
   vi.mocked(createAgentSession).mockImplementation(
     // biome-ignore lint/style/noNonNullAssertion: set by installMock before spawn reaches createAgentSession
@@ -95,6 +104,60 @@ beforeEach(() => {
 });
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe("local imp flags", () => {
+  function registeredExtension(type: "boolean" | "string", tools: string[] = ["policy_tool"]): Extension {
+    return {
+      path: "/fake/policy.ts",
+      resolvedPath: "/fake/policy.ts",
+      tools: new Map(tools.map((name) => [name, {}])),
+      flags: new Map([["safe-mode", { name: "safe-mode", type, extensionPath: "/fake/policy.ts" }]]),
+    } as unknown as Extension;
+  }
+
+  async function launch(flags: string[], agent: AgentConfig = testAgent) {
+    const imps = new Map();
+    const mock = installMock({ totalTurns: 1 });
+    const ctx = createMockContext();
+    const summon = summonTool(imps, [agent], makeNamePool(), makeSettings({ impFlags: flags }));
+    await summon.execute(
+      "tc1",
+      { task: "analyze the codebase thoroughly", agent: agent.name },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const result = await waitTool(imps).execute("tc2", { mode: "all" }, undefined, undefined, ctx);
+    return { mock, result: parseResult(result) };
+  }
+
+  it("sets a selected extension's boolean flag before binding and prompting", async () => {
+    extensionsRef.current = [registeredExtension("boolean")];
+    const { mock, result } = await launch(["safe-mode"], { ...testAgent, tools: ["policy_tool"] });
+    expect(mock.controls.flagsAtBind?.get("safe-mode")).toBe(true);
+    expect(mock.controls.promptStarted).toBe(true);
+    expect(result[0].status).toBe("completed");
+  });
+
+  it("leaves no-flag sessions unchanged", async () => {
+    const { mock, result } = await launch([]);
+    expect(mock.controls.flagValues.size).toBe(0);
+    expect(result[0].status).toBe("completed");
+  });
+
+  it.each([
+    ["missing", [], testAgent, /safe-mode.*not registered by a selected extension/],
+    ["non-boolean", [registeredExtension("string")], testAgent, /safe-mode.*not a boolean flag/],
+    ["filtered out", [registeredExtension("boolean")], { ...testAgent, tools: [] }, /safe-mode.*selected extension/],
+  ])("rejects %s before worker creation or prompt", async (_case, extensions, agent, error) => {
+    extensionsRef.current = extensions;
+    const { mock, result } = await launch(["safe-mode"], agent);
+    expect(result[0].status).toBe("failed");
+    expect(result[0].error).toMatch(error);
+    expect(createAgentSession).not.toHaveBeenCalled();
+    expect(mock.controls.promptStarted).toBe(false);
+  });
+});
 
 describe("summon → wait integration", () => {
   it("completes with final output", async () => {

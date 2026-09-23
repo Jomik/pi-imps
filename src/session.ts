@@ -126,6 +126,29 @@ export function buildImpResourceLoader(cwd: string, config: AgentConfig, setting
 }
 
 /**
+ * Require each requested flag to be boolean on exactly one selected extension.
+ * Duplicate registrations are ambiguous even if both declare a boolean flag.
+ */
+export function validateImpFlags(requested: string[], selected: Extension[]): string[] {
+  for (const name of requested) {
+    const registrations = selected.flatMap((ext) => {
+      const flag = ext.flags.get(name);
+      return flag ? [flag] : [];
+    });
+    if (registrations.length !== 1 || registrations[0].type !== "boolean") {
+      const reason =
+        registrations.length === 0
+          ? "is not registered by a selected extension"
+          : registrations.length > 1
+            ? "is registered by multiple selected extensions"
+            : "is not a boolean flag";
+      throw new Error(`impFlags: "${name}" ${reason}; check the imp's tool allowlist and additionalExtensions`);
+    }
+  }
+  return [...new Set(requested)];
+}
+
+/**
  * Resolve the model an imp session/launch uses: the named agent's configured
  * model, or the parent session's model when the agent has none.
  */
@@ -187,6 +210,9 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   const { loader, toolAllowlist } = buildImpResourceLoader(cwd, config, settings);
   await loader.reload();
 
+  // Validate against the loader's selected extensions before creating a worker.
+  const impFlags = validateImpFlags(settings.impFlags, loader.getExtensions().extensions);
+
   // Resolve model: named agent's model or parent model
   const model = resolveImpModel(config, parentModel, modelRegistry);
 
@@ -200,6 +226,8 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
     modelRuntime: getBackingModelRuntime(modelRegistry),
     resourceLoader: loader,
   });
+
+  for (const name of impFlags) session.extensionRunner.setFlagValue(name, true);
 
   // Bind extensions with no UI context (headless imp)
   await session.bindExtensions({ shutdownHandler: async () => {} });

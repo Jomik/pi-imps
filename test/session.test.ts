@@ -14,6 +14,7 @@ import {
   resolveToolAllowlist,
   resolveTurnLimit,
   shouldIncludeExtension,
+  validateImpFlags,
 } from "../src/session.js";
 
 // ─── helpers ───────────────────────────────────────────────────────────────
@@ -312,6 +313,36 @@ describe("shouldIncludeExtension", () => {
     expect(shouldIncludeExtension(inlineExt, ["read"], [])).toBe(true);
     // Even an empty allowlist (no tools at all) keeps it.
     expect(shouldIncludeExtension(inlineExt, [], [])).toBe(true);
+  });
+});
+
+// ─── validateImpFlags ───────────────────────────────────────────────────────
+
+describe("validateImpFlags", () => {
+  const withFlag = (name: string, type: "boolean" | "string", extName = "policy") => {
+    const ext = makeExt(extName, []);
+    ext.flags.set(name, { name, type, extensionPath: ext.path });
+    return ext;
+  };
+
+  it("accepts boolean flags on selected extensions and deduplicates requests", () => {
+    expect(validateImpFlags(["safe-mode", "safe-mode"], [withFlag("safe-mode", "boolean")])).toEqual(["safe-mode"]);
+    expect(validateImpFlags([], [])).toEqual([]);
+  });
+
+  it("rejects unknown and filtered-out flags", () => {
+    expect(() => validateImpFlags(["missing"], [])).toThrow(/missing.*not registered by a selected extension/);
+    const selected = [makeExt("other", ["read"])];
+    const filtered = withFlag("safe-mode", "boolean");
+    expect(() => validateImpFlags(["safe-mode"], selected)).toThrow(/safe-mode.*selected extension/);
+    expect(validateImpFlags(["safe-mode"], [...selected, filtered])).toEqual(["safe-mode"]);
+  });
+
+  it("rejects string flags and conflicting registrations", () => {
+    expect(() => validateImpFlags(["safe-mode"], [withFlag("safe-mode", "string")])).toThrow(/not a boolean/);
+    expect(() =>
+      validateImpFlags(["safe-mode"], [withFlag("safe-mode", "boolean"), withFlag("safe-mode", "string", "other")]),
+    ).toThrow(/multiple selected extensions/);
   });
 });
 
