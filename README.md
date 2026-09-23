@@ -183,7 +183,7 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
 | `toolAllowlist` | string[] | all tools | Default tool allowlist for all imps. Overridden by agent frontmatter `tools`. |
 | `orca.enabled` | boolean | `false` | Run summoned imps as Orca-dispatched workers in the current worktree instead of in-process. Requires a local POSIX host (darwin/linux) and an available Orca with a current worktree; see [Orca-backed imps](#orca-backed-imps-optional). |
 | `additionalExtensions` | string[] | none | Extensions that always load on imp sessions regardless of tool filtering |
-| `impFlags` | string[] | `[]` | Global names of boolean flags registered by extensions selected for each imp, in local or Orca mode. Lowercase hyphenated names only (e.g. `policy-check`), without `--` or values; duplicates are removed in first-seen order. Invalid settings fail to load; later launch preflights will reject flags not registered as boolean by selected extensions. Extensions define what their flags mean. No project or per-summon overrides. |
+| `impFlags` | string[] | `[]` | Global names of boolean flags registered by extensions selected for each imp, in local or Orca mode. Lowercase hyphenated names only (e.g. `policy-check`), without `--` or values; duplicates are removed in first-seen order. Invalid settings fail to load; each launch rejects flags not registered as boolean by exactly one selected extension before creating the worker. Extensions define what their flags mean. No project or per-summon overrides. |
 | `agents` | object | none | Per-agent additive tool grants. Keys are agent names. Tools are unioned with the effective base allowlist: agent frontmatter `tools` when present, otherwise global `toolAllowlist`. |
 
 ### Project config

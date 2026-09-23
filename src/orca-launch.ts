@@ -5,7 +5,13 @@ import { fileURLToPath } from "node:url";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { OrcaExecFn } from "./orca.js";
-import { buildImpResourceLoader, resolveImpModel, resolveImpThinkingLevel, resolveTurnLimit } from "./session.js";
+import {
+  buildImpResourceLoader,
+  resolveImpModel,
+  resolveImpThinkingLevel,
+  resolveTurnLimit,
+  validateImpFlags,
+} from "./session.js";
 import type { AgentConfig, ImpSettings, ThinkingLevel } from "./types.js";
 
 /**
@@ -148,7 +154,32 @@ export interface BuildOrcaLaunchArgvParams {
   systemPrompt: string;
   toolAllowlist: string[] | undefined;
   readyFile?: string;
+  impFlags?: readonly string[];
 }
+
+/** Pi core and pi-imps worker switches must not be shadowed by extension flags. */
+const RESERVED_WORKER_FLAGS = new Set([
+  "no-extensions",
+  "no-skills",
+  "no-prompt-templates",
+  "no-themes",
+  "no-session",
+  "is-imp",
+  "imp-turn-limit",
+  "imp-ready-file",
+  "model",
+  "thinking",
+  "system-prompt",
+  "tools",
+  "help",
+  "version",
+  "continue",
+  "resume",
+  "session",
+  "print",
+  "json",
+  "extension",
+]);
 
 /**
  * Build the exact `pi` argv for an Orca imp launch. An explicit tool allowlist
@@ -192,6 +223,13 @@ export function buildOrcaLaunchArgv(params: BuildOrcaLaunchArgvParams): string[]
 
   if (params.toolAllowlist !== undefined) {
     argv.push("--tools", params.toolAllowlist.join(","));
+  }
+
+  for (const name of new Set(params.impFlags ?? [])) {
+    if (typeof name !== "string" || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name) || RESERVED_WORKER_FLAGS.has(name)) {
+      throw new Error(`impFlags: invalid or reserved Orca worker flag "${name}"`);
+    }
+    argv.push(`--${name}`);
   }
 
   return argv;
@@ -259,6 +297,7 @@ export async function prepareOrcaLaunch(opts: PrepareOrcaLaunchOptions): Promise
   await loader.reload();
   opts.signal?.throwIfAborted();
   const { extensions } = loader.getExtensions();
+  const impFlags = validateImpFlags(opts.settings.impFlags, extensions);
   const selectedExtensionPaths = extensions
     .map((ext) => {
       if (ext.resolvedPath && isAbsolute(ext.resolvedPath)) return ext.resolvedPath;
@@ -284,6 +323,7 @@ export async function prepareOrcaLaunch(opts: PrepareOrcaLaunchOptions): Promise
     systemPrompt: opts.config.systemPrompt,
     toolAllowlist,
     readyFile: opts.readyFile,
+    impFlags,
   });
 
   return {

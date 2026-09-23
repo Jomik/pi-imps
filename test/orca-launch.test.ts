@@ -216,6 +216,30 @@ describe("buildOrcaLaunchArgv", () => {
     );
   });
 
+  it("appends unique flag names as standalone tokens and quotes the full command", () => {
+    const argv = buildOrcaLaunchArgv({
+      ...base,
+      toolAllowlist: ["read"],
+      impFlags: ["policy-check", "audit2", "policy-check"],
+    });
+    expect(argv.slice(-4)).toEqual(["--tools", "read", "--policy-check", "--audit2"]);
+    expect(buildOrcaCommand(argv)).toContain("'--tools' 'read' '--policy-check' '--audit2'");
+  });
+
+  it.each([
+    "",
+    "--unsafe",
+    "bad name",
+    "x; echo danger",
+    "model",
+    "is-imp",
+    "imp-ready-file",
+    "tools",
+    "help",
+  ])("rejects an unsafe or reserved direct-call flag: %s", (name) => {
+    expect(() => buildOrcaLaunchArgv({ ...base, toolAllowlist: undefined, impFlags: [name] })).toThrow(/impFlags/);
+  });
+
   it("runs workers without persisting a Pi session", () => {
     const argv = buildOrcaLaunchArgv({ ...base, toolAllowlist: undefined });
     expect(argv).toContain("--no-session");
@@ -755,6 +779,62 @@ describe("prepareOrcaLaunch", () => {
     expect(plan.extensionPaths).toEqual(["/fake/shared/src/index.ts"]);
   });
 
+  // ── imp flags ──────────────────────────────────────────────────────────
+
+  it("passes boolean flags from selected tool providers and additionalExtensions once", async () => {
+    const readExt = makeExt("pi-read", ["read"]);
+    readExt.flags.set("policy-check", { name: "policy-check", type: "boolean" } as never);
+    const sandboxExt = makeRealExt(cwd, "pi-sandbox", []);
+    sandboxExt.flags.set("audit2", { name: "audit2", type: "boolean" } as never);
+    mockExtensions = [readExt, sandboxExt];
+
+    const plan = await prepareOrcaLaunch({
+      cwd,
+      config: makeAgent({ tools: ["read"] }),
+      parentModel,
+      parentThinkingLevel: "low",
+      modelRegistry: makeModelRegistry([parentModel]),
+      settings: makeSettings({
+        additionalExtensions: ["pi-sandbox"],
+        impFlags: ["policy-check", "audit2", "policy-check"],
+      }),
+      exec: makeExec(),
+      platform: "linux",
+    });
+    expect(plan.extensionPaths).toEqual([readExt.resolvedPath, sandboxExt.resolvedPath]);
+    expect(plan.argv.slice(-2)).toEqual(["--policy-check", "--audit2"]);
+    expect(plan.command).toContain("'--policy-check' '--audit2'");
+  });
+
+  it.each([
+    ["missing", [], "not registered"],
+    ["string", ["read"], "not a boolean"],
+    ["filtered", ["read"], "not registered"],
+    ["conflicting", ["read"], "multiple selected"],
+  ])("rejects %s imp flags during preparation", async (caseName, tools, reason) => {
+    const selected = makeExt("pi-read", ["read"]);
+    if (caseName === "string") selected.flags.set("policy-check", { name: "policy-check", type: "string" } as never);
+    if (caseName === "conflicting")
+      selected.flags.set("policy-check", { name: "policy-check", type: "boolean" } as never);
+    const other = makeExt("pi-other", caseName === "filtered" ? ["write"] : ["read"]);
+    if (caseName === "filtered" || caseName === "conflicting") {
+      other.flags.set("policy-check", { name: "policy-check", type: "boolean" } as never);
+    }
+    mockExtensions = [selected, other];
+    await expect(
+      prepareOrcaLaunch({
+        cwd,
+        config: makeAgent({ tools }),
+        parentModel,
+        parentThinkingLevel: "low",
+        modelRegistry: makeModelRegistry([parentModel]),
+        settings: makeSettings({ impFlags: ["policy-check"] }),
+        exec: makeExec(),
+        platform: "linux",
+      }),
+    ).rejects.toThrow(new RegExp(`impFlags.*${reason}`));
+  });
+
   // ── Orca host-integration extensions ──────────────────────────────────
 
   it("always appends discovered Orca host extensions after selected extensions", async () => {
@@ -780,6 +860,32 @@ describe("prepareOrcaLaunch", () => {
       });
 
       expect(plan.extensionPaths).toEqual(["/fake/read/src/index.ts", hostExt]);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat host-only extension paths as flag registrations", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-imps-orca-host-flag-"));
+    const extDir = join(agentDir, "extensions");
+    mkdirSync(extDir, { recursive: true });
+    writeFileSync(join(extDir, "orca-policy.ts"), "export default () => {}");
+    vi.mocked(getAgentDir).mockReturnValue(agentDir);
+
+    try {
+      mockExtensions = [];
+      await expect(
+        prepareOrcaLaunch({
+          cwd,
+          config: makeAgent(),
+          parentModel,
+          parentThinkingLevel: "low",
+          modelRegistry: makeModelRegistry([parentModel]),
+          settings: makeSettings({ impFlags: ["policy-check"] }),
+          exec: makeExec(),
+          platform: "linux",
+        }),
+      ).rejects.toThrow(/impFlags.*not registered by a selected extension/);
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
     }
