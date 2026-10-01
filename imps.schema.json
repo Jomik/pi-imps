@@ -23,9 +23,9 @@
     },
     "additionalExtensions": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
       "default": [],
-      "description": "Extensions that always load on imp sessions regardless of tool filtering. Agent frontmatter cannot override this."
+      "description": "Non-array values, non-string entries, and blank strings fail settings loading; omission or [] is valid. Requested package install commands use global Pi settings only. Explicit Pi extension sources loaded in SDK and Orca imps regardless of discovery/tool filtering: local files/directories, npm: packages (e.g. npm:pi-ward), git: packages, or builtin:codemode. Relative paths, including bare names such as pi-ward, resolve from getAgentDir(), not the imp cwd, and fail if no enabled extension exists there. Unresolvable or unloadable sources, including unsupported or unregistered builtins, fail launch explicitly. Loading never grants tools beyond the resolved allowlist; pi-imps remains excluded and requests to load it are rejected to prevent recursion. Explicit builtin:codemode sources load independently of codemode tool grants; both requests require createCodemodeExtension (Pi SDK >=0.99.2) and fail with actionable SDK upgrade guidance if missing. Ordinary imps without a codemode request continue to work. Agent frontmatter and project config cannot override this."
     },
     "impFlags": {
       "type": "array",

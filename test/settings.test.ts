@@ -104,9 +104,40 @@ describe("parseImpSettings", () => {
     expect(settings.toolAllowlist).toBeUndefined();
   });
 
-  it("handles non-array additionalExtensions gracefully", () => {
-    const settings = parseImpSettings({ additionalExtensions: "pi-sandbox" });
-    expect(settings.additionalExtensions).toEqual([]);
+  it.each([
+    null,
+    false,
+    "pi-sandbox",
+    {},
+    1,
+    undefined,
+  ])("rejects a present non-array additionalExtensions: %s", (value) => {
+    expect(() => parseImpSettings({ additionalExtensions: value })).toThrow(/additionalExtensions.*array/);
+  });
+
+  it.each([
+    "",
+    " ",
+    "\t\n",
+    null,
+    1,
+    false,
+    {},
+    ["policy.ts"],
+    undefined,
+  ])("rejects an invalid additionalExtensions entry: %s", (value) => {
+    expect(() => parseImpSettings({ additionalExtensions: ["./policy.ts", value] })).toThrow(
+      /additionalExtensions.*entry 1.*nonblank source string/,
+    );
+  });
+
+  it("accepts an empty additionalExtensions array", () => {
+    expect(parseImpSettings({ additionalExtensions: [] }).additionalExtensions).toEqual([]);
+  });
+
+  it("preserves valid source strings, including directories and surrounding whitespace", () => {
+    const sources = [".", "./", "./policy.ts", "npm:pi-ward", "git:example/policy", "builtin:codemode", " policy.ts "];
+    expect(parseImpSettings({ additionalExtensions: sources }).additionalExtensions).toEqual(sources);
   });
 
   it("reads all fields together", () => {
@@ -240,6 +271,13 @@ describe("loadImpSettings", () => {
     expect(settings.turnLimit).toBe(20);
     expect(settings.toolAllowlist).toEqual(["read"]);
     expect(settings.additionalExtensions).toEqual(["pi-sandbox"]);
+  });
+
+  it("fails settings loading for malformed additionalExtensions instead of dropping a requested policy", () => {
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ additionalExtensions: ["./policy.ts", ""] }));
+    expect(() => loadImpSettings(tmpDir)).toThrow(/additionalExtensions.*entry 1/);
+    writeFileSync(join(tmpDir, "imps.json"), JSON.stringify({ additionalExtensions: null }));
+    expect(() => loadImpSettings(tmpDir)).toThrow(/additionalExtensions.*array/);
   });
 
   it("reads agents from imps.json", () => {

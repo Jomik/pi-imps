@@ -79,23 +79,36 @@ When a tool allowlist is active, extensions that provide no allowed tools are **
 
 ### Codemode grants
 
-The baseline allowlist is agent frontmatter `tools`, falling back to global `toolAllowlist`. Name `codemode` there (for example, `tools: [read, edit, codemode]`) or in global/project `agents.<name>.tools` additive grants into a defined baseline to load and activate Pi's built-in codemode tool in local and Orca imps. An empty baseline can receive additive grants; special codemode loading stays disabled when the **resolved** list is empty or lacks `codemode`. An undefined baseline stays undefined even with additive grants, preserving existing unfiltered behavior without implicitly inheriting parent codemode activation.
+The baseline allowlist is agent frontmatter `tools`, falling back to global `toolAllowlist`. Name `codemode` there (for example, `tools: [read, edit, codemode]`) or in global/project `agents.<name>.tools` additive grants into a defined baseline to load and activate Pi's built-in codemode tool in local and Orca imps. An empty baseline can receive additive grants. Unless `additionalExtensions` explicitly requests `builtin:codemode`, grant-driven codemode loading stays disabled when the **resolved** list is empty or lacks `codemode`; an undefined baseline stays undefined even with additive grants, preserving existing unfiltered behavior without implicitly inheriting parent codemode activation.
 
 Orca loads it with `-e builtin:codemode`: a builtin identifier, not a filesystem path. `--tools` still carries the unchanged resolved allowlist.
 
-This does not grant any additional underlying tools to scripts or allow recursive delegation. Explicit grants require a Pi SDK exporting `createCodemodeExtension` (available in 0.99.2); older SDKs still support ordinary imps, but fail an explicit codemode grant at summon/launch with upgrade guidance.
+This does not grant any additional underlying tools to scripts or allow recursive delegation. Explicit codemode tool grants and explicit `builtin:codemode` sources both require a Pi SDK exporting `createCodemodeExtension` (available in 0.99.2). If the factory is missing, either request fails at summon/launch with actionable SDK upgrade guidance; ordinary imps without a codemode request continue to work.
 
 ### Additional extensions
 
-Some extensions should always load on imp sessions regardless of the tool allowlist — permission systems, sandboxing, audit logging. Configure in `~/.pi/agent/imps.json`:
+Request explicit Pi extension sources in global `~/.pi/agent/imps.json` to load permission systems, sandboxing, or audit logging even when not discovered and regardless of tool filtering. Sources can be local files/directories (e.g. `./extensions/policy.ts` or `./extensions/policy`), [Pi packages](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md) (`npm:pi-ward`, `npm:@example/pi-tools@1.0.0`, `git:github.com/example/pi-tools@v1`), or `builtin:codemode`. This is source loading, not a keep-list of discovered package names: bare names such as `pi-ward` are local paths under `getAgentDir()` and fail if no enabled extension exists there. For an installed package, migrate to `npm:pi-ward` (or its actual local path).
 
 ```json
 {
-  "additionalExtensions": ["pi-sandbox"]
+  "additionalExtensions": ["npm:pi-sandbox"]
 }
 ```
 
-Agent frontmatter cannot override additional extensions.
+Invalid `additionalExtensions` values (non-arrays, non-string entries, or blank strings) fail settings loading; omission or `[]` is valid.
+
+Local relative paths resolve from `getAgentDir()` — the global `imps.json` directory (normally `~/.pi/agent`) — **not** the imp's working directory. Both SDK (in-process) and Orca imps use this resolution. A requested source that cannot resolve or load fails launch with a clear diagnostic instead of silently disappearing. Agent frontmatter and project config cannot override additional extensions.
+
+Loading never grants tools beyond the resolved allowlist or permits recursion: pi-imps remains excluded from ordinary children, and requests to load pi-imps are rejected. To load **and activate** codemode, grant it explicitly too:
+
+```json
+{
+  "toolAllowlist": ["read", "edit", "codemode"],
+  "additionalExtensions": ["builtin:codemode"]
+}
+```
+
+Explicit `builtin:codemode` loading has the same SDK compatibility requirement and upgrade error as [codemode tool grants](#codemode-grants), even without a tool grant. Unsupported or unregistered builtin sources fail launch explicitly. Source loading does not expand scripts' underlying tools.
 
 ### Commands
 
@@ -176,7 +189,7 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
   "$schema": "https://github.com/Jomik/pi-imps/blob/main/imps.schema.json",
   "turnLimit": 30,
   "toolAllowlist": ["read", "edit", "bash", "write", "web_search"],
-  "additionalExtensions": ["pi-sandbox"],
+  "additionalExtensions": ["npm:pi-sandbox"],
   "impFlags": [],
   "agents": {
     "mason": { "tools": ["run_tests"] }
@@ -190,7 +203,7 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
 | `turnLimit` | number | 30 | Max turns per imp (minimum 2) |
 | `toolAllowlist` | string[] | all tools | Default tool allowlist for all imps. Overridden by agent frontmatter `tools`. |
 | `orca.enabled` | boolean | `false` | Run summoned imps as Orca-dispatched workers in the current worktree instead of in-process. Requires a local POSIX host (darwin/linux) and an available Orca with a current worktree; see [Orca-backed imps](#orca-backed-imps-optional). |
-| `additionalExtensions` | string[] | none | Extensions that always load on imp sessions regardless of tool filtering |
+| `additionalExtensions` | string[] | none | Explicit Pi extension sources to load in SDK and Orca imps regardless of discovery/tool filtering; loading does not grant tools. See [Additional extensions](#additional-extensions) for source syntax, path resolution, and launch failures. |
 | `impFlags` | string[] | `[]` | Global names of boolean flags registered by extensions selected for each imp, in local or Orca mode. Lowercase hyphenated names only (e.g. `policy-check`), without `--` or values; duplicates are removed in first-seen order. Invalid settings fail to load; each launch rejects flags not registered as boolean by exactly one selected extension before creating the worker. Extensions define what their flags mean. No project or per-summon overrides. |
 | `agents` | object | none | Per-agent additive tool grants. Keys are agent names. Tools are unioned with the effective base allowlist: agent frontmatter `tools` when present, otherwise global `toolAllowlist`. |
 

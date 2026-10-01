@@ -247,12 +247,12 @@ describe("shouldIncludeExtension", () => {
   // Additional extensions
   it("includes additional extension even if its tools not in allowlist", () => {
     const ext = makeExt("pi-sandbox", ["sandbox_check"]);
-    expect(shouldIncludeExtension(ext, ["read"], ["pi-sandbox"], "pi-sandbox")).toBe(true);
+    expect(shouldIncludeExtension(ext, ["read"], [ext.resolvedPath], "pi-sandbox")).toBe(true);
   });
 
   it("includes additional extension even with empty allowlist", () => {
     const ext = makeExt("pi-sandbox", ["sandbox_check"]);
-    expect(shouldIncludeExtension(ext, [], ["pi-sandbox"], "pi-sandbox")).toBe(true);
+    expect(shouldIncludeExtension(ext, [], [ext.resolvedPath], "pi-sandbox")).toBe(true);
   });
 
   // Allowlist: undefined (absent) = all tools

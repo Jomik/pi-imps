@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
@@ -13,6 +13,7 @@ import type {
 import * as piSdk from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
+  DefaultPackageManager,
   DefaultResourceLoader,
   getAgentDir,
   SessionManager,
@@ -100,7 +101,11 @@ export interface ImpResourceLoader {
  * The caller is responsible for `await loader.reload()` before reading
  * `loader.getExtensions()` or passing the loader to `createAgentSession`.
  */
-export function buildImpResourceLoader(cwd: string, config: AgentConfig, settings: ImpSettings): ImpResourceLoader {
+export async function buildImpResourceLoader(
+  cwd: string,
+  config: AgentConfig,
+  settings: ImpSettings,
+): Promise<ImpResourceLoader> {
   const projectConfig = loadProjectConfig(cwd);
   const agentKey = config.name;
   const globalAgentTools = settings.agents[agentKey]?.tools;
@@ -110,8 +115,40 @@ export function buildImpResourceLoader(cwd: string, config: AgentConfig, setting
   const toolAllowlist = resolveToolAllowlist(config.tools, settings.toolAllowlist, additiveTools);
   const extensionFactories: NonNullable<ConstructorParameters<typeof DefaultResourceLoader>[0]["extensionFactories"]> =
     [InlineExtension];
+  const agentDir = getAgentDir();
+  const settingsManager = SettingsManager.create(cwd, agentDir);
+  // Globally configured sources must not inherit repo-controlled install commands.
+  const packageManager = new DefaultPackageManager({
+    cwd: agentDir,
+    agentDir,
+    settingsManager: SettingsManager.inMemory(settingsManager.getGlobalSettings()),
+  });
+  const requestedPaths = new Map<string, string[]>();
+  for (const source of new Set(settings.additionalExtensions)) {
+    try {
+      const paths = source.startsWith("builtin:")
+        ? [source]
+        : (await packageManager.resolveExtensionSources([source], { temporary: true })).extensions
+            .filter((resource) => resource.enabled)
+            .map((resource) => resource.path);
+      if (paths.length === 0) throw new Error("source is missing or contains no enabled extensions");
+      for (const path of paths) {
+        if (
+          readPackageName(join(path, "package.json")) === OWN_PACKAGE_NAME ||
+          getExtensionPackageName({ path, resolvedPath: path } as Extension) === OWN_PACKAGE_NAME
+        ) {
+          throw new Error("pi-imps cannot be requested: imps are leaf workers and cannot spawn recursive sessions");
+        }
+      }
+      requestedPaths.set(source, paths);
+    } catch (error) {
+      throw new Error(`additionalExtensions: "${source}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const additionalExtensionPaths = [...new Set([...requestedPaths.values()].flat())];
   const codemodeGranted = toolAllowlist?.includes("codemode");
-  if (codemodeGranted) {
+  const codemodeRequested = requestedPaths.has("builtin:codemode");
+  if (codemodeGranted || codemodeRequested) {
     // Older supported SDKs lack this export; ordinary sessions must still work.
     const createCodemodeExtension = (
       piSdk as typeof piSdk & {
@@ -120,7 +157,7 @@ export function buildImpResourceLoader(cwd: string, config: AgentConfig, setting
     ).createCodemodeExtension;
     if (typeof createCodemodeExtension !== "function") {
       throw new Error(
-        "pi-imps: explicit codemode grants require Pi's createCodemodeExtension factory; upgrade @earendil-works/pi-coding-agent to 0.99.2 or newer, or remove codemode from the imp's tool grants",
+        `pi-imps: explicit codemode grants or additionalExtensions source "builtin:codemode" require Pi's createCodemodeExtension factory; upgrade @earendil-works/pi-coding-agent to 0.99.2 or newer, or remove codemode from the imp's tool grants and additionalExtensions`,
       );
     }
     const codemode = {
@@ -130,21 +167,35 @@ export function buildImpResourceLoader(cwd: string, config: AgentConfig, setting
       factory: createCodemodeExtension({ mode: "on" }),
     };
     extensionFactories.push(codemode);
+    if (!additionalExtensionPaths.includes("builtin:codemode")) additionalExtensionPaths.push("builtin:codemode");
   }
 
   const loader = new DefaultResourceLoader({
     cwd,
-    agentDir: getAgentDir(),
+    agentDir,
+    settingsManager,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
     systemPrompt: config.systemPrompt || undefined,
     extensionFactories,
-    ...(codemodeGranted ? { additionalExtensionPaths: ["builtin:codemode"] } : {}),
-    extensionsOverride: (base) => ({
-      ...base,
-      extensions: selectImpExtensions(base.extensions, toolAllowlist, settings.additionalExtensions),
-    }),
+    ...(additionalExtensionPaths.length ? { additionalExtensionPaths } : {}),
+    extensionsOverride: (base) => {
+      for (const [source, paths] of requestedPaths) {
+        for (const path of paths) {
+          const identity = extensionPathIdentity(path);
+          const error = base.errors.find((entry) => extensionPathIdentity(entry.path) === identity);
+          if (error) throw new Error(`additionalExtensions: "${source}" (${path}): ${error.error}`);
+          if (!base.extensions.some((ext) => extensionPathIdentity(ext.resolvedPath || ext.path) === identity)) {
+            throw new Error(`additionalExtensions: "${source}" (${path}): requested extension was not loaded`);
+          }
+        }
+      }
+      return {
+        ...base,
+        extensions: selectImpExtensions(base.extensions, toolAllowlist, additionalExtensionPaths),
+      };
+    },
   });
 
   return { loader, toolAllowlist };
@@ -232,7 +283,7 @@ export async function spawnImpSession(opts: SpawnImpSessionOptions): Promise<Age
   } = opts;
 
   // Load project config and resolve per-agent additive tools, plus extensions
-  const { loader, toolAllowlist } = buildImpResourceLoader(cwd, config, settings);
+  const { loader, toolAllowlist } = await buildImpResourceLoader(cwd, config, settings);
   await loader.reload();
 
   // Validate against the loader's selected extensions before creating a worker.
@@ -465,7 +516,13 @@ export function shouldIncludeExtension(
   if (extName === OWN_PACKAGE_NAME) return false;
 
   // Additional extensions always load
-  if (extName && additionalExtensions.includes(extName)) return true;
+  if (
+    additionalExtensions.some(
+      (path) => extensionPathIdentity(path) === extensionPathIdentity(ext.resolvedPath || ext.path),
+    )
+  ) {
+    return true;
+  }
 
   // If no allowlist, keep everything
   if (!toolAllowlist) return true;
@@ -505,7 +562,7 @@ export function selectImpExtensions(
 export function getExtensionPackageName(ext: Extension): string | undefined {
   // Builtin identifiers are not files; walking from them can find pi-imps itself.
   if (ext.path?.startsWith("builtin:")) return ext.path.slice("builtin:".length);
-  const resolvedPath = ext.resolvedPath || ext.path;
+  const resolvedPath = extensionPathIdentity(ext.resolvedPath || ext.path);
   if (!resolvedPath) return undefined;
   if (resolvedPath.startsWith("builtin:")) return resolvedPath.slice("builtin:".length);
 
@@ -522,6 +579,16 @@ export function getExtensionPackageName(ext: Extension): string | undefined {
   // Fallback: filename without .ts
   const base = basename(resolvedPath);
   return base.replace(/\.ts$/, "") || undefined;
+}
+
+/** Match Pi's canonical-path deduplication, preserving builtin and inline identifiers. */
+function extensionPathIdentity(path: string): string {
+  if (path.startsWith("builtin:") || path.startsWith("<")) return path;
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 function readPackageName(path: string): string | undefined {

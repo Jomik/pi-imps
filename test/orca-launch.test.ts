@@ -42,6 +42,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     },
     DefaultResourceLoader: class {
       private factoryExtensions: Extension[] = [];
+      private result!: ReturnType<InstanceType<typeof real.DefaultResourceLoader>["getExtensions"]>;
       constructor(private opts: typeof mockLoaderOptions) {
         mockLoaderOptions = opts;
       }
@@ -68,14 +69,15 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
           } as unknown as ExtensionAPI);
           this.factoryExtensions.push(ext);
         }
-      }
-      getExtensions() {
         const base = {
           extensions: [...mockExtensions, ...this.factoryExtensions],
           errors: [],
           runtime: {},
         } as unknown as ReturnType<InstanceType<typeof real.DefaultResourceLoader>["getExtensions"]>;
-        return this.opts.extensionsOverride ? this.opts.extensionsOverride(base) : base;
+        this.result = this.opts.extensionsOverride ? this.opts.extensionsOverride(base) : base;
+      }
+      getExtensions() {
+        return this.result;
       }
     },
   };
@@ -464,7 +466,7 @@ describe("prepareOrcaLaunch", () => {
 
   it("registers and selects the named builtin codemode provider only on an explicit grant", async () => {
     const tools = ["read", "codemode"];
-    const { loader, toolAllowlist } = buildImpResourceLoader(cwd, makeAgent({ tools }), makeSettings());
+    const { loader, toolAllowlist } = await buildImpResourceLoader(cwd, makeAgent({ tools }), makeSettings());
     expect(toolAllowlist).toBe(tools);
     expect(mockLoaderOptions.additionalExtensionPaths).toEqual(["builtin:codemode"]);
     expect(mockLoaderOptions.extensionFactories).toEqual([
@@ -478,9 +480,71 @@ describe("prepareOrcaLaunch", () => {
     expect([...selected[1].tools.keys()]).toEqual(["codemode"]);
   });
 
+  it.each([
+    undefined,
+    [],
+    ["read"],
+    ["read", "codemode"],
+  ])("loads requested codemode once without changing grants: %j", async (tools) => {
+    const { loader, toolAllowlist } = await buildImpResourceLoader(
+      cwd,
+      makeAgent({ tools }),
+      makeSettings({
+        additionalExtensions: ["builtin:codemode", "builtin:codemode"],
+      }),
+    );
+    await loader.reload();
+    expect(toolAllowlist).toEqual(tools);
+    expect(loader.getExtensions().extensions.map((ext) => ext.path)).toEqual(["<inline:1>", "builtin:codemode"]);
+    expect(mockLoaderOptions.additionalExtensionPaths).toEqual(["builtin:codemode"]);
+    expect(supportingCodemodeFactory).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes requested builtin codemode to Orca without granting its tool", async () => {
+    const plan = await prepareOrcaLaunch({
+      cwd,
+      config: makeAgent({ tools: [] }),
+      settings: makeSettings({ additionalExtensions: ["builtin:codemode"] }),
+      parentModel,
+      parentThinkingLevel: "off",
+      modelRegistry: makeModelRegistry([parentModel]),
+      exec: makeExec(),
+      platform: "linux",
+    });
+    expect(plan.extensionPaths).toEqual(["builtin:codemode"]);
+    expect(plan.toolAllowlist).toEqual([]);
+    expect(plan.argv.slice(-2)).toEqual(["--tools", ""]);
+    expect(plan.command).toContain("'-e' 'builtin:codemode'");
+  });
+
+  it("rejects a resolved requested source silently omitted by the loader during reload", async () => {
+    const ext = makeRealExt(cwd, "policy", []);
+    const { loader } = await buildImpResourceLoader(
+      cwd,
+      makeAgent({ tools: [] }),
+      makeSettings({
+        additionalExtensions: [ext.resolvedPath],
+      }),
+    );
+    await expect(loader.reload()).rejects.toThrow(/additionalExtensions.*policy.*requested extension was not loaded/);
+  });
+
+  it("fails a codemode request actionably when the SDK lacks the factory", async () => {
+    mockCodemodeFactory = undefined;
+    await expect(
+      buildImpResourceLoader(
+        cwd,
+        makeAgent({ tools: [] }),
+        makeSettings({
+          additionalExtensions: ["builtin:codemode"],
+        }),
+      ),
+    ).rejects.toThrow(/builtin:codemode.*upgrade.*0\.99\.2/);
+  });
+
   it("fails explicit grants actionably when the SDK lacks the factory", async () => {
     mockCodemodeFactory = undefined;
-    expect(() => buildImpResourceLoader(cwd, makeAgent({ tools: ["codemode"] }), makeSettings())).toThrow(
+    await expect(buildImpResourceLoader(cwd, makeAgent({ tools: ["codemode"] }), makeSettings())).rejects.toThrow(
       /explicit codemode grants.*upgrade.*0\.99\.2.*remove codemode/,
     );
     await expect(
@@ -501,7 +565,7 @@ describe("prepareOrcaLaunch", () => {
     mockCodemodeFactory = undefined;
     // Even an additive grant cannot turn an undefined baseline into an explicit list.
     const settings = makeSettings({ agents: { coder: { tools: tools === undefined ? ["codemode"] : [] } } });
-    const { loader, toolAllowlist } = buildImpResourceLoader(cwd, makeAgent({ tools }), settings);
+    const { loader, toolAllowlist } = await buildImpResourceLoader(cwd, makeAgent({ tools }), settings);
     await loader.reload();
     expect(toolAllowlist).toEqual(tools);
     expect(mockLoaderOptions.extensionFactories).toHaveLength(1);
@@ -814,7 +878,7 @@ describe("prepareOrcaLaunch", () => {
       modelRegistry: makeModelRegistry([parentModel]),
       settings: makeSettings({
         agents: { coder: { tools: ["run_tests"] } },
-        additionalExtensions: ["pi-sandbox"],
+        additionalExtensions: [sandboxExt.resolvedPath],
       }),
       exec,
       platform: "linux",
@@ -926,7 +990,7 @@ describe("prepareOrcaLaunch", () => {
       parentThinkingLevel: "low",
       modelRegistry: makeModelRegistry([parentModel]),
       settings: makeSettings({
-        additionalExtensions: ["pi-sandbox"],
+        additionalExtensions: [sandboxExt.resolvedPath],
         impFlags: ["policy-check", "audit2", "policy-check"],
       }),
       exec: makeExec(),

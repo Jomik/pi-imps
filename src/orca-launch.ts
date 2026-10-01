@@ -276,7 +276,7 @@ export async function prepareOrcaLaunch(opts: PrepareOrcaLaunchOptions): Promise
   const thinkingLevel = resolveImpThinkingLevel(opts.config.thinking ?? opts.parentThinkingLevel);
   const turnLimit = resolveTurnLimit(opts.config.turnLimit, opts.settings.turnLimit);
 
-  const { loader, toolAllowlist } = buildImpResourceLoader(opts.cwd, opts.config, opts.settings);
+  const { loader, toolAllowlist } = await buildImpResourceLoader(opts.cwd, opts.config, opts.settings);
   opts.signal?.throwIfAborted();
   await loader.reload();
   opts.signal?.throwIfAborted();

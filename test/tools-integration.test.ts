@@ -21,12 +21,15 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     // Stub resource loader to avoid real I/O in integration tests
     DefaultResourceLoader: class {
       constructor(private options: ConstructorParameters<typeof real.DefaultResourceLoader>[0]) {}
-      async reload() {}
-      getExtensions() {
+      private result!: ReturnType<InstanceType<typeof real.DefaultResourceLoader>["getExtensions"]>;
+      async reload() {
         const base = { extensions: extensionsRef.current, errors: [] } as unknown as ReturnType<
           InstanceType<typeof real.DefaultResourceLoader>["getExtensions"]
         >;
-        return this.options.extensionsOverride?.(base) ?? base;
+        this.result = this.options.extensionsOverride?.(base) ?? base;
+      }
+      getExtensions() {
+        return this.result;
       }
     },
   };
@@ -115,11 +118,11 @@ describe("local imp flags", () => {
     } as unknown as Extension;
   }
 
-  async function launch(flags: string[], agent: AgentConfig = testAgent) {
+  async function launch(flags: string[], agent: AgentConfig = testAgent, additionalExtensions: string[] = []) {
     const imps = new Map();
     const mock = installMock({ totalTurns: 1 });
     const ctx = createMockContext();
-    const summon = summonTool(imps, [agent], makeNamePool(), makeSettings({ impFlags: flags }));
+    const summon = summonTool(imps, [agent], makeNamePool(), makeSettings({ impFlags: flags, additionalExtensions }));
     await summon.execute(
       "tc1",
       { task: "analyze the codebase thoroughly", agent: agent.name },
@@ -137,6 +140,24 @@ describe("local imp flags", () => {
     expect(mock.controls.flagsAtBind?.get("safe-mode")).toBe(true);
     expect(mock.controls.promptStarted).toBe(true);
     expect(result[0].status).toBe("completed");
+  });
+
+  it("sets flags from a requested tool-less extension without granting tools", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-imps-policy-"));
+    try {
+      const path = join(dir, "policy.ts");
+      writeFileSync(path, "export default () => {};");
+      const ext = registeredExtension("boolean", []);
+      ext.path = path;
+      ext.resolvedPath = path;
+      extensionsRef.current = [ext];
+      const { mock, result } = await launch(["safe-mode"], { ...testAgent, tools: [] }, [path]);
+      expect(mock.controls.flagsAtBind?.get("safe-mode")).toBe(true);
+      expect(result[0].status).toBe("completed");
+      expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({ tools: [] }));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("leaves no-flag sessions unchanged", async () => {
