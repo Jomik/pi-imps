@@ -117,10 +117,11 @@ export async function buildImpResourceLoader(
     [InlineExtension];
   const agentDir = getAgentDir();
   const settingsManager = SettingsManager.create(cwd, agentDir);
+  // Globally configured sources must not inherit repo-controlled install commands.
   const packageManager = new DefaultPackageManager({
     cwd: agentDir,
     agentDir,
-    settingsManager,
+    settingsManager: SettingsManager.inMemory(settingsManager.getGlobalSettings()),
   });
   const requestedPaths = new Map<string, string[]>();
   for (const source of new Set(settings.additionalExtensions)) {

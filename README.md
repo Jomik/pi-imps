@@ -95,6 +95,8 @@ Request explicit Pi extension sources in global `~/.pi/agent/imps.json` to load 
 }
 ```
 
+Invalid `additionalExtensions` values (non-arrays, non-string entries, or blank strings) fail settings loading; omission or `[]` is valid.
+
 Local relative paths resolve from `getAgentDir()` — the global `imps.json` directory (normally `~/.pi/agent`) — **not** the imp's working directory. Both SDK (in-process) and Orca imps use this resolution. A requested source that cannot resolve or load fails launch with a clear diagnostic instead of silently disappearing. Agent frontmatter and project config cannot override additional extensions.
 
 Loading never grants tools beyond the resolved allowlist or permits recursion: pi-imps remains excluded from ordinary children, and requests to load pi-imps are rejected. To load **and activate** codemode, grant it explicitly too:

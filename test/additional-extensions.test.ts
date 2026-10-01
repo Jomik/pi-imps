@@ -78,9 +78,11 @@ describe("requested extensions through the real Pi source resolver and loader", 
     expect(selected.some((ext) => ext.path === "<inline:1>")).toBe(true);
   });
 
-  it("resolves only requested sources with the configured npm command and global local-path anchor", async () => {
+  it("isolates requested sources from project npm commands while preserving the global local-path anchor", async () => {
     const path = fixture("policy.ts");
     fixture("settings.json", JSON.stringify({ npmCommand: ["npm-policy", "--policy"], packages: ["npm:unrequested"] }));
+    mkdirSync(join(cwd, ".pi"));
+    writeFileSync(join(cwd, ".pi/settings.json"), JSON.stringify({ npmCommand: ["project-command"] }));
     const resolve = DefaultPackageManager.prototype.resolveExtensionSources;
     const spy = vi.spyOn(DefaultPackageManager.prototype, "resolveExtensionSources").mockImplementation(async function (
       this: InstanceType<typeof DefaultPackageManager>,
@@ -101,7 +103,13 @@ describe("requested extensions through the real Pi source resolver and loader", 
       return result;
     });
     // Do not reload configured packages; this check covers the requested-source resolver only.
-    await buildImpResourceLoader(cwd, config, settings(["npm:policy", "./policy.ts"]));
+    const { loader } = await buildImpResourceLoader(cwd, config, settings(["npm:policy", "./policy.ts"]));
+    const loaderSettings = (
+      loader as unknown as {
+        settingsManager: { getNpmCommand(): string[] | undefined };
+      }
+    ).settingsManager;
+    expect(loaderSettings.getNpmCommand()).toEqual(["project-command"]);
     expect(spy.mock.calls).toEqual([
       [["npm:policy"], { temporary: true }],
       [["./policy.ts"], { temporary: true }],
