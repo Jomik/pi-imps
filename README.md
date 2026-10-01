@@ -87,15 +87,26 @@ This does not grant any additional underlying tools to scripts or allow recursiv
 
 ### Additional extensions
 
-Some extensions should always load on imp sessions regardless of the tool allowlist — permission systems, sandboxing, audit logging. Configure in `~/.pi/agent/imps.json`:
+Request explicit Pi extension sources in global `~/.pi/agent/imps.json` to load permission systems, sandboxing, or audit logging even when not discovered and regardless of tool filtering. Sources can be local files/directories (e.g. `./extensions/policy.ts` or `./extensions/policy`), [Pi packages](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md) (`npm:pi-ward`, `npm:@example/pi-tools@1.0.0`, `git:github.com/example/pi-tools@v1`), or `builtin:codemode`. This is source loading, not a keep-list of discovered package names: migrate bare `pi-ward` to `npm:pi-ward` (or its actual local path).
 
 ```json
 {
-  "additionalExtensions": ["pi-sandbox"]
+  "additionalExtensions": ["npm:pi-sandbox"]
 }
 ```
 
-Agent frontmatter cannot override additional extensions.
+Local relative paths resolve from `getAgentDir()` — the global `imps.json` directory (normally `~/.pi/agent`) — **not** the imp's working directory. Both SDK (in-process) and Orca imps use this resolution. A requested source that cannot resolve or load fails launch with a clear diagnostic instead of silently disappearing. Agent frontmatter and project config cannot override additional extensions.
+
+Loading never grants tools beyond the resolved allowlist or permits recursion: pi-imps remains excluded from ordinary children, and requests to load pi-imps are rejected. To load **and activate** codemode, grant it explicitly too:
+
+```json
+{
+  "toolAllowlist": ["read", "edit", "codemode"],
+  "additionalExtensions": ["builtin:codemode"]
+}
+```
+
+`builtin:codemode` requires a supporting Pi SDK >=0.99.2 exporting `createCodemodeExtension`; arbitrary builtin identifiers are not guaranteed without a corresponding factory. Source loading does not change the [explicit codemode grant behavior](#codemode-grants) or expand scripts' underlying tools.
 
 ### Commands
 
@@ -176,7 +187,7 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
   "$schema": "https://github.com/Jomik/pi-imps/blob/main/imps.schema.json",
   "turnLimit": 30,
   "toolAllowlist": ["read", "edit", "bash", "write", "web_search"],
-  "additionalExtensions": ["pi-sandbox"],
+  "additionalExtensions": ["npm:pi-sandbox"],
   "impFlags": [],
   "agents": {
     "mason": { "tools": ["run_tests"] }
@@ -190,7 +201,7 @@ All settings are optional. Create `~/.pi/agent/imps.json` to configure pi-imps:
 | `turnLimit` | number | 30 | Max turns per imp (minimum 2) |
 | `toolAllowlist` | string[] | all tools | Default tool allowlist for all imps. Overridden by agent frontmatter `tools`. |
 | `orca.enabled` | boolean | `false` | Run summoned imps as Orca-dispatched workers in the current worktree instead of in-process. Requires a local POSIX host (darwin/linux) and an available Orca with a current worktree; see [Orca-backed imps](#orca-backed-imps-optional). |
-| `additionalExtensions` | string[] | none | Extensions that always load on imp sessions regardless of tool filtering |
+| `additionalExtensions` | string[] | none | Explicit Pi extension sources to load in SDK and Orca imps regardless of discovery/tool filtering; loading does not grant tools. See [Additional extensions](#additional-extensions) for source syntax, path resolution, and launch failures. |
 | `impFlags` | string[] | `[]` | Global names of boolean flags registered by extensions selected for each imp, in local or Orca mode. Lowercase hyphenated names only (e.g. `policy-check`), without `--` or values; duplicates are removed in first-seen order. Invalid settings fail to load; each launch rejects flags not registered as boolean by exactly one selected extension before creating the worker. Extensions define what their flags mean. No project or per-summon overrides. |
 | `agents` | object | none | Per-agent additive tool grants. Keys are agent names. Tools are unioned with the effective base allowlist: agent frontmatter `tools` when present, otherwise global `toolAllowlist`. |
 
