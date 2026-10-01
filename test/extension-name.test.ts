@@ -205,9 +205,10 @@ describe("shouldIncludeExtension — unpopulated sourceInfo", () => {
   it("force-keeps additionalExtension when sourceInfo is unpopulated, even under restrictive allowlist", () => {
     const ext = makeUnpopulatedExt("pi-ward", ["guard_check"]);
     // guard_check is NOT in the allowlist, but pi-ward is in additionalExtensions
-    expect(shouldIncludeExtension(ext, ["read", "edit"], ["pi-ward"])).toBe(true);
+    expect(shouldIncludeExtension(ext, ["read", "edit"], [ext.resolvedPath])).toBe(true);
     // Empty allowlist — same: force-kept
-    expect(shouldIncludeExtension(ext, [], ["pi-ward"])).toBe(true);
+    expect(shouldIncludeExtension(ext, [], [ext.resolvedPath])).toBe(true);
+    expect(shouldIncludeExtension(ext, [], ["pi-ward"])).toBe(false);
     // Not in additionalExtensions + restrictive allowlist → excluded
     expect(shouldIncludeExtension(ext, ["read", "edit"], [])).toBe(false);
   });
@@ -271,7 +272,7 @@ describe("selectImpExtensions", () => {
     } as unknown as Extension;
 
     const extensions = [impsExt, wardExt, sandboxExt, disallowedExt, inlineExt];
-    const result = selectImpExtensions(extensions, ["read"], ["pi-ward"]);
+    const result = selectImpExtensions(extensions, ["read"], [wardExt.resolvedPath]);
 
     // Exact expected object identities, in original relative order.
     expect(result).toEqual([wardExt, sandboxExt, inlineExt]);
@@ -306,7 +307,7 @@ describe("selectImpExtensions", () => {
     const sandboxExt = makePkgExt("pi-sandbox", ["read"]);
     const disallowedExt = makePkgExt("pi-medium", ["fetch_content"]);
 
-    const result = selectImpExtensions([sandboxExt, disallowedExt], [], ["pi-sandbox"]);
+    const result = selectImpExtensions([sandboxExt, disallowedExt], [], [sandboxExt.resolvedPath]);
 
     expect(result).toEqual([sandboxExt]);
   });
