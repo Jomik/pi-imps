@@ -13,7 +13,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 
 const { buildImpResourceLoader, spawnImpSession, validateImpFlags } = await import("../src/session.js");
 const { prepareOrcaLaunch } = await import("../src/orca-launch.js");
-const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
+const { createAgentSession, DefaultPackageManager } = await import("@earendil-works/pi-coding-agent");
 
 const config: AgentConfig = {
   name: "test",
@@ -58,7 +58,10 @@ beforeEach(() => {
   mkdirSync(cwd);
   vi.clearAllMocks();
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  rmSync(root, { recursive: true, force: true });
+});
 
 describe("requested extensions through the real Pi source resolver and loader", () => {
   it.each([
@@ -73,6 +76,36 @@ describe("requested extensions through the real Pi source resolver and loader", 
     expect(selected.map((ext) => ext.resolvedPath)).toContain(path);
     expect(validateImpFlags(["safe-mode"], selected)).toEqual(["safe-mode"]);
     expect(selected.some((ext) => ext.path === "<inline:1>")).toBe(true);
+  });
+
+  it("resolves only requested sources with the configured npm command and global local-path anchor", async () => {
+    const path = fixture("policy.ts");
+    fixture("settings.json", JSON.stringify({ npmCommand: ["npm-policy", "--policy"], packages: ["npm:unrequested"] }));
+    const resolve = DefaultPackageManager.prototype.resolveExtensionSources;
+    const spy = vi.spyOn(DefaultPackageManager.prototype, "resolveExtensionSources").mockImplementation(async function (
+      this: InstanceType<typeof DefaultPackageManager>,
+      sources,
+      options,
+    ) {
+      const manager = this as unknown as {
+        cwd: string;
+        agentDir: string;
+        settingsManager: { getNpmCommand(): string[] | undefined };
+      };
+      expect(manager.settingsManager.getNpmCommand()).toEqual(["npm-policy", "--policy"]);
+      expect(manager.cwd).toBe(agentDir);
+      expect(manager.agentDir).toBe(agentDir);
+      // Substitute a local fixture for the package request; never invoke npm or git.
+      const result = await resolve.call(this, sources[0] === "npm:policy" ? ["./policy.ts"] : sources, options);
+      expect(result.extensions.map((resource) => resource.path)).toContain(path);
+      return result;
+    });
+    // Do not reload configured packages; this check covers the requested-source resolver only.
+    await buildImpResourceLoader(cwd, config, settings(["npm:policy", "./policy.ts"]));
+    expect(spy.mock.calls).toEqual([
+      [["npm:policy"], { temporary: true }],
+      [["./policy.ts"], { temporary: true }],
+    ]);
   });
 
   it("loads a directory index and every package entrypoint", async () => {

@@ -116,10 +116,11 @@ export async function buildImpResourceLoader(
   const extensionFactories: NonNullable<ConstructorParameters<typeof DefaultResourceLoader>[0]["extensionFactories"]> =
     [InlineExtension];
   const agentDir = getAgentDir();
+  const settingsManager = SettingsManager.create(cwd, agentDir);
   const packageManager = new DefaultPackageManager({
     cwd: agentDir,
     agentDir,
-    settingsManager: SettingsManager.inMemory(),
+    settingsManager,
   });
   const requestedPaths = new Map<string, string[]>();
   for (const source of new Set(settings.additionalExtensions)) {
@@ -171,6 +172,7 @@ export async function buildImpResourceLoader(
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
+    settingsManager,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,

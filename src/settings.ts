@@ -29,9 +29,9 @@ export function parseImpSettings(block: Record<string, unknown> | undefined): Im
 
   const toolAllowlist = Array.isArray(block.toolAllowlist) ? (block.toolAllowlist as string[]) : DEFAULTS.toolAllowlist;
 
-  const additionalExtensions = Array.isArray(block.additionalExtensions)
-    ? (block.additionalExtensions as string[])
-    : DEFAULTS.additionalExtensions;
+  const additionalExtensions = Object.hasOwn(block, "additionalExtensions")
+    ? parseAdditionalExtensions(block.additionalExtensions)
+    : [];
 
   const impFlags = Object.hasOwn(block, "impFlags") ? parseImpFlags(block.impFlags) : [];
   const agents = parseAgentsConfig(block.agents);
@@ -39,6 +39,18 @@ export function parseImpSettings(block: Record<string, unknown> | undefined): Im
   const orca = parseOrcaConfig(block.orca);
 
   return { turnLimit, toolAllowlist, additionalExtensions, impFlags, agents, orca };
+}
+
+/** Reject malformed requested sources rather than dropping or broadening a policy request. */
+function parseAdditionalExtensions(raw: unknown): string[] {
+  if (!Array.isArray(raw))
+    throw new Error("Global imps.json 'additionalExtensions' must be an array of source strings");
+  for (const [index, source] of raw.entries()) {
+    if (typeof source !== "string" || source.trim().length === 0) {
+      throw new Error(`Global imps.json 'additionalExtensions' entry ${index} must be a nonblank source string`);
+    }
+  }
+  return raw as string[];
 }
 
 /** Reject malformed requested flags rather than silently dropping a policy. */
