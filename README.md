@@ -77,6 +77,12 @@ This is the default for all imps. An agent's `tools` frontmatter overrides it �
 
 When a tool allowlist is active, extensions that provide no allowed tools are **excluded entirely** — no prompt injection, no event hooks, nothing. If you need a tool-less extension on imp sessions (e.g. logging, analytics), add it to `additionalExtensions`.
 
+### Codemode grants
+
+Add `codemode` to an explicit tool allowlist (for example, agent frontmatter `tools: [read, edit, codemode]`) to load and activate Pi's built-in codemode tool in local and Orca imps. Global or project per-agent additive grants work too when the baseline allowlist is defined. Orca loads it explicitly as `builtin:codemode`.
+
+This does not grant any additional underlying tools to scripts or allow recursive delegation. Undefined, empty, and non-codemode allowlists keep their existing behavior; parent codemode activation is not implicitly inherited. Explicit grants require a Pi SDK exporting `createCodemodeExtension` (available in 0.99.2); older SDKs still support ordinary imps, but fail an explicit codemode grant with upgrade guidance.
+
 ### Additional extensions
 
 Some extensions should always load on imp sessions regardless of the tool allowlist — permission systems, sandboxing, audit logging. Configure in `~/.pi/agent/imps.json`:

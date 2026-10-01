@@ -10,6 +10,7 @@ import type {
   ModelRuntime,
   ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
+import * as piSdk from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -57,9 +58,9 @@ export const FINAL_TURN_DIRECTIVE =
   "FINAL TURN. Do not start new work. Save any pending changes, commit your progress, and respond with: (1) what you completed, (2) what remains unfinished.";
 
 /**
- * Path `DefaultResourceLoader` assigns to the sole entry of `extensionFactories`
- * (index 0 → `<inline:1>`). pi-imps always passes exactly one factory
- * (`InlineExtension` below), so this path deterministically identifies it.
+ * Path `DefaultResourceLoader` assigns to the first inline factory
+ * (index 0 → `<inline:1>`). `InlineExtension` always comes first, before
+ * any named builtin factories, so this path deterministically identifies it.
  */
 const INLINE_EXTENSION_PATH = "<inline:1>";
 
@@ -107,6 +108,29 @@ export function buildImpResourceLoader(cwd: string, config: AgentConfig, setting
   const additiveTools = mergeAdditiveTools(globalAgentTools, projectAgentTools);
 
   const toolAllowlist = resolveToolAllowlist(config.tools, settings.toolAllowlist, additiveTools);
+  const extensionFactories: NonNullable<ConstructorParameters<typeof DefaultResourceLoader>[0]["extensionFactories"]> =
+    [InlineExtension];
+  const codemodeGranted = toolAllowlist?.includes("codemode");
+  if (codemodeGranted) {
+    // Older supported SDKs lack this export; ordinary sessions must still work.
+    const createCodemodeExtension = (
+      piSdk as typeof piSdk & {
+        createCodemodeExtension?: (options: { mode: "on" }) => ExtensionFactory;
+      }
+    ).createCodemodeExtension;
+    if (typeof createCodemodeExtension !== "function") {
+      throw new Error(
+        "pi-imps: explicit codemode grants require Pi's createCodemodeExtension factory; upgrade @earendil-works/pi-coding-agent to 0.99.2 or newer, or remove codemode from the imp's tool grants",
+      );
+    }
+    const codemode = {
+      name: "codemode",
+      builtin: true,
+      replaceable: true,
+      factory: createCodemodeExtension({ mode: "on" }),
+    };
+    extensionFactories.push(codemode);
+  }
 
   const loader = new DefaultResourceLoader({
     cwd,
@@ -115,7 +139,8 @@ export function buildImpResourceLoader(cwd: string, config: AgentConfig, setting
     noPromptTemplates: true,
     noThemes: true,
     systemPrompt: config.systemPrompt || undefined,
-    extensionFactories: [InlineExtension],
+    extensionFactories,
+    ...(codemodeGranted ? { additionalExtensionPaths: ["builtin:codemode"] } : {}),
     extensionsOverride: (base) => ({
       ...base,
       extensions: selectImpExtensions(base.extensions, toolAllowlist, settings.additionalExtensions),
@@ -466,7 +491,7 @@ export function selectImpExtensions(
 }
 
 /**
- * Resolve the package name of an extension.
+ * Resolve the package name of an extension (or its name for builtin: identifiers).
  *
  * Walks up the directory tree from `ext.resolvedPath` (falling back to
  * `ext.path`) looking for the nearest `package.json` and returns its `name`
@@ -478,8 +503,11 @@ export function selectImpExtensions(
  * `package.json` is found anywhere up to the filesystem root.
  */
 export function getExtensionPackageName(ext: Extension): string | undefined {
+  // Builtin identifiers are not files; walking from them can find pi-imps itself.
+  if (ext.path?.startsWith("builtin:")) return ext.path.slice("builtin:".length);
   const resolvedPath = ext.resolvedPath || ext.path;
   if (!resolvedPath) return undefined;
+  if (resolvedPath.startsWith("builtin:")) return resolvedPath.slice("builtin:".length);
 
   // Walk up from the file's directory to find the nearest package.json
   let dir = dirname(resolvedPath);
