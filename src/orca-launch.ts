@@ -228,7 +228,7 @@ export interface OrcaLaunchPlan {
   readonly thinkingLevel: string;
   readonly turnLimit: number;
   readonly toolAllowlist: string[] | undefined;
-  /** Absolute paths of selected extensions (excluding the internal worker entrypoint and inline pseudo-paths), in selection order. */
+  /** Selected absolute extension paths or builtin: identifiers (excluding the worker entrypoint and inline pseudo-paths), in selection order. */
   readonly extensionPaths: readonly string[];
   readonly workerEntrypoint: string;
 }
@@ -284,6 +284,8 @@ export async function prepareOrcaLaunch(opts: PrepareOrcaLaunchOptions): Promise
   const impFlags = validateImpFlags(opts.settings.impFlags, extensions);
   const selectedExtensionPaths = extensions
     .map((ext) => {
+      if (ext.path?.startsWith("builtin:")) return ext.path;
+      if (ext.resolvedPath?.startsWith("builtin:")) return ext.resolvedPath;
       if (ext.resolvedPath && isAbsolute(ext.resolvedPath)) return ext.resolvedPath;
       const fallback = ext.path;
       if (!fallback || fallback.startsWith("<")) return fallback;

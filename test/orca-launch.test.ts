@@ -2,7 +2,13 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { Extension, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type {
+  Extension,
+  ExtensionAPI,
+  ExtensionFactory,
+  ModelRegistry,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig, ImpSettings } from "../src/types.js";
 
@@ -17,22 +23,58 @@ const DEFAULT_MOCK_AGENT_DIR = "/nonexistent-pi-agent-dir-for-testing-xyz";
 // real extension discovery I/O.
 
 let mockExtensions: Extension[] = [];
+const supportingCodemodeFactory = vi.fn(
+  (_options: { mode: "on" }): ExtensionFactory =>
+    (pi) => {
+      pi.registerTool({ name: "codemode" } as ToolDefinition);
+    },
+);
+let mockCodemodeFactory: typeof supportingCodemodeFactory | undefined = supportingCodemodeFactory;
+let mockLoaderOptions: ConstructorParameters<typeof import("@earendil-works/pi-coding-agent").DefaultResourceLoader>[0];
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const real = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
   return {
     ...real,
     getAgentDir: vi.fn(() => DEFAULT_MOCK_AGENT_DIR),
+    get createCodemodeExtension() {
+      return mockCodemodeFactory;
+    },
     DefaultResourceLoader: class {
-      private opts: {
-        extensionsOverride?: (base: { extensions: Extension[] }) => { extensions: Extension[] };
-      };
-      constructor(opts: typeof this.opts) {
-        this.opts = opts;
+      private factoryExtensions: Extension[] = [];
+      constructor(private opts: typeof mockLoaderOptions) {
+        mockLoaderOptions = opts;
       }
-      async reload() {}
+      async reload() {
+        this.factoryExtensions = [];
+        for (const [index, entry] of (this.opts.extensionFactories ?? []).entries()) {
+          const named =
+            typeof entry === "function"
+              ? undefined
+              : (entry as {
+                  name: string;
+                  builtin: boolean;
+                  replaceable: boolean;
+                  factory: ExtensionFactory;
+                });
+          const path = named?.builtin ? `builtin:${named.name}` : `<inline:${index + 1}>`;
+          const ext = makeExt(path, [], path);
+          const factory = typeof entry === "function" ? entry : entry.factory;
+          await factory({
+            on: vi.fn(),
+            registerTool: (tool: ToolDefinition) => {
+              ext.tools.set(tool.name, { definition: tool, sourceInfo: ext.sourceInfo });
+            },
+          } as unknown as ExtensionAPI);
+          this.factoryExtensions.push(ext);
+        }
+      }
       getExtensions() {
-        const base = { extensions: mockExtensions, errors: [], runtime: {} };
+        const base = {
+          extensions: [...mockExtensions, ...this.factoryExtensions],
+          errors: [],
+          runtime: {},
+        } as unknown as ReturnType<InstanceType<typeof real.DefaultResourceLoader>["getExtensions"]>;
         return this.opts.extensionsOverride ? this.opts.extensionsOverride(base) : base;
       }
     },
@@ -42,6 +84,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 const { prepareOrcaLaunch, buildOrcaLaunchArgv, buildOrcaCommand, posixQuote, discoverOrcaHostExtensions } =
   await import("../src/orca-launch.js");
 const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+const { buildImpResourceLoader } = await import("../src/session.js");
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -374,6 +417,8 @@ describe("prepareOrcaLaunch", () => {
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), "pi-imps-orca-launch-"));
     mockExtensions = [];
+    mockCodemodeFactory = supportingCodemodeFactory;
+    supportingCodemodeFactory.mockClear();
     vi.mocked(getAgentDir).mockReturnValue(DEFAULT_MOCK_AGENT_DIR);
   });
 
@@ -416,6 +461,90 @@ describe("prepareOrcaLaunch", () => {
       throw new Error(`unexpected orca command: ${args.join(" ")}`);
     });
   }
+
+  it("registers and selects the named builtin codemode provider only on an explicit grant", async () => {
+    const tools = ["read", "codemode"];
+    const { loader, toolAllowlist } = buildImpResourceLoader(cwd, makeAgent({ tools }), makeSettings());
+    expect(toolAllowlist).toBe(tools);
+    expect(mockLoaderOptions.additionalExtensionPaths).toEqual(["builtin:codemode"]);
+    expect(mockLoaderOptions.extensionFactories).toEqual([
+      expect.any(Function),
+      { name: "codemode", builtin: true, replaceable: true, factory: expect.any(Function) },
+    ]);
+    expect(supportingCodemodeFactory).toHaveBeenCalledWith({ mode: "on" });
+    await loader.reload();
+    const selected = loader.getExtensions().extensions;
+    expect(selected.map((ext) => ext.path)).toEqual(["<inline:1>", "builtin:codemode"]);
+    expect([...selected[1].tools.keys()]).toEqual(["codemode"]);
+  });
+
+  it("fails explicit grants actionably when the SDK lacks the factory", async () => {
+    mockCodemodeFactory = undefined;
+    expect(() => buildImpResourceLoader(cwd, makeAgent({ tools: ["codemode"] }), makeSettings())).toThrow(
+      /explicit codemode grants.*upgrade.*0\.99\.2.*remove codemode/,
+    );
+    await expect(
+      prepareOrcaLaunch({
+        cwd,
+        config: makeAgent({ tools: ["codemode"] }),
+        settings: makeSettings(),
+        parentModel,
+        parentThinkingLevel: "high",
+        modelRegistry: makeModelRegistry([parentModel]),
+        exec: makeExec(),
+        platform: "linux",
+      }),
+    ).rejects.toThrow(/createCodemodeExtension/);
+  });
+
+  it.each([undefined, [], ["read"]])("keeps old SDK behavior without an explicit grant: %j", async (tools) => {
+    mockCodemodeFactory = undefined;
+    // Even an additive grant cannot turn an undefined baseline into an explicit list.
+    const settings = makeSettings({ agents: { coder: { tools: tools === undefined ? ["codemode"] : [] } } });
+    const { loader, toolAllowlist } = buildImpResourceLoader(cwd, makeAgent({ tools }), settings);
+    await loader.reload();
+    expect(toolAllowlist).toEqual(tools);
+    expect(mockLoaderOptions.extensionFactories).toHaveLength(1);
+    expect(mockLoaderOptions.additionalExtensionPaths).toBeUndefined();
+    expect(loader.getExtensions().extensions.map((ext) => ext.path)).toEqual(["<inline:1>"]);
+    expect(supportingCodemodeFactory).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "agent",
+    "default",
+    "global",
+    "project",
+  ])("preserves builtin Orca paths and underlying --tools for a %s grant", async (source) => {
+    const config = makeAgent({
+      tools: source === "default" ? undefined : source === "agent" ? ["read", "codemode"] : ["read"],
+    });
+    const settings = makeSettings();
+    if (source === "default") settings.toolAllowlist = ["read", "codemode"];
+    if (source === "global") settings.agents.coder = { tools: ["codemode"] };
+    if (source === "project") {
+      mkdirSync(join(cwd, ".pi"));
+      writeFileSync(join(cwd, ".pi", "imps.json"), JSON.stringify({ agents: { coder: { tools: ["codemode"] } } }));
+    }
+    mockExtensions = [makeExt("pi-read", ["read"]), makeExt("pi-bash", ["bash"])];
+    const plan = await prepareOrcaLaunch({
+      cwd,
+      config,
+      settings,
+      parentModel,
+      parentThinkingLevel: "high",
+      modelRegistry: makeModelRegistry([parentModel]),
+      exec: makeExec(),
+      platform: "linux",
+    });
+    expect(plan.toolAllowlist).toEqual(["read", "codemode"]);
+    expect(plan.extensionPaths).toEqual([mockExtensions[0].resolvedPath, "builtin:codemode"]);
+    expect(
+      plan.argv.slice(plan.argv.indexOf("builtin:codemode") - 1, plan.argv.indexOf("builtin:codemode") + 1),
+    ).toEqual(["-e", "builtin:codemode"]);
+    expect(plan.argv.slice(-2)).toEqual(["--tools", "read,codemode"]);
+    expect(plan.command).toContain("'-e' 'builtin:codemode'");
+  });
 
   // ── platform gate ─────────────────────────────────────────────────────
 

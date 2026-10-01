@@ -67,6 +67,17 @@ afterAll(() => {
 // ─── tests ─────────────────────────────────────────────────────────────────
 
 describe("getExtensionPackageName", () => {
+  it("names builtin providers without mistaking the current package for pi-imps", () => {
+    const ext = makeExtStub({ path: "builtin:codemode" });
+    expect(getExtensionPackageName(ext)).toBe("codemode");
+    ext.tools = new Map([["codemode", {}]]) as Extension["tools"];
+    expect(shouldIncludeExtension(ext, ["codemode"], [])).toBe(true);
+    expect(shouldIncludeExtension(ext, [], [])).toBe(false);
+    expect(shouldIncludeExtension(ext, ["read"], [])).toBe(false);
+    ext.path = "";
+    expect(getExtensionPackageName(ext)).toBe("codemode");
+  });
+
   it("reads name from baseDir/package.json for package extensions", () => {
     const ext = makeExtStub({
       origin: "package",
