@@ -79,9 +79,11 @@ When a tool allowlist is active, extensions that provide no allowed tools are **
 
 ### Codemode grants
 
-Add `codemode` to an explicit tool allowlist (for example, agent frontmatter `tools: [read, edit, codemode]`) to load and activate Pi's built-in codemode tool in local and Orca imps. Global or project per-agent additive grants work too when the baseline allowlist is defined. Orca loads it explicitly as `builtin:codemode`.
+The baseline allowlist is agent frontmatter `tools`, falling back to global `toolAllowlist`. Name `codemode` there (for example, `tools: [read, edit, codemode]`) or in global/project `agents.<name>.tools` additive grants into a defined baseline to load and activate Pi's built-in codemode tool in local and Orca imps. An empty baseline can receive additive grants; special codemode loading stays disabled when the **resolved** list is empty or lacks `codemode`. An undefined baseline stays undefined even with additive grants, preserving existing unfiltered behavior without implicitly inheriting parent codemode activation.
 
-This does not grant any additional underlying tools to scripts or allow recursive delegation. Undefined, empty, and non-codemode allowlists keep their existing behavior; parent codemode activation is not implicitly inherited. Explicit grants require a Pi SDK exporting `createCodemodeExtension` (available in 0.99.2); older SDKs still support ordinary imps, but fail an explicit codemode grant with upgrade guidance.
+Orca loads it with `-e builtin:codemode`: a builtin identifier, not a filesystem path. `--tools` still carries the unchanged resolved allowlist.
+
+This does not grant any additional underlying tools to scripts or allow recursive delegation. Explicit grants require a Pi SDK exporting `createCodemodeExtension` (available in 0.99.2); older SDKs still support ordinary imps, but fail an explicit codemode grant at summon/launch with upgrade guidance.
 
 ### Additional extensions
 
