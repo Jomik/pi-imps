@@ -1,10 +1,19 @@
+import {
+  createEventBus,
+  createExtensionRuntime,
+  ExtensionRunner,
+  type ModelRegistry,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { loadExtensionFromFactory } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js";
 import {
   buildOrcaSendArgs,
   buildStatusSubject,
   createImpLifecycleState,
   DEFAULT_IMP_TURN_LIMIT,
   extractTaskAfterMarker,
+  initOrcaWorker,
   ORCA_DISPATCHED_WORKER_PREAMBLE,
   parseImpLifecycleStatus,
   parseImpTurnLimit,
@@ -12,6 +21,9 @@ import {
   reportImpCompletion,
   verifyOrcaWorkerDispatch,
 } from "../src/orca.js";
+import { buildImpResourceLoader } from "../src/session.js";
+import { preserveImpToolPrompt } from "../src/tool-prompt.js";
+import { effectiveRunnerPrompt } from "./helpers/tool-prompt.js";
 
 function validPrompt(overrides?: Partial<{ handle: string; taskId: string; dispatchId: string; capability: string }>) {
   const handle = overrides?.handle ?? "worker-7";
@@ -27,6 +39,71 @@ When finished, report completion by running:
 orca orchestration send --from ${handle} --dispatch-capability ${capability} --type worker_done --subject "Task complete" --body "Implemented the feature and tests pass." --task-id ${taskId} --dispatch-id ${dispatchId} --outcome succeeded
 `;
 }
+
+describe("Orca tool prompt registration through the installed ExtensionRunner", () => {
+  it("uses the shared hook and returns role-preserving effective guidance", async () => {
+    const runtime = createExtensionRuntime();
+    const extension = await loadExtensionFromFactory(
+      (pi) => initOrcaWorker(pi, 30),
+      "/project",
+      createEventBus(),
+      runtime,
+    );
+    const { loader } = await buildImpResourceLoader(
+      "/project",
+      {
+        name: "reviewer",
+        description: "review",
+        source: "project",
+        filePath: "/reviewer.md",
+        systemPrompt: "You are a reviewer.",
+        tools: [],
+      },
+      {
+        turnLimit: 30,
+        toolAllowlist: undefined,
+        additionalExtensions: [],
+        impFlags: [],
+        agents: {},
+        orca: { enabled: false },
+      },
+    );
+    await loader.reload();
+    const inline = loader.getExtensions().extensions.find((ext) => ext.path === "<inline:1>");
+    expect(inline?.handlers.get("before_agent_start")).toEqual([preserveImpToolPrompt]);
+    expect(extension.handlers.get("before_agent_start")).toEqual(inline?.handlers.get("before_agent_start"));
+    const runner = new ExtensionRunner(
+      [extension],
+      runtime,
+      "/project",
+      SessionManager.inMemory("/project"),
+      {} as ModelRegistry,
+    );
+    const errors: unknown[] = [];
+    runner.onError((error) => errors.push(error));
+    const input = {
+      cwd: "/project",
+      customPrompt: "You are an Orca reviewer.",
+      appendSystemPrompt: "Keep append.",
+      contextFiles: [{ path: "/AGENTS.md", content: "Keep context." }],
+      selectedTools: ["batch"],
+      toolSnippets: { batch: "Batch calls.", hidden: "Unavailable" },
+      toolGuidelines: { batch: ["Use independent batches."], hidden: ["Unavailable guideline"] },
+      promptGuidelines: ["Use independent batches."],
+    };
+    const { effective } = await effectiveRunnerPrompt(runner, "Review", input);
+    expect(errors).toEqual([]);
+    expect(effective).toContain("Available tools:\n- batch: Batch calls.\n\nGuidelines:\n- Use independent batches.");
+    expect(effective.match(/- Use independent batches\./g)).toHaveLength(1);
+    expect(effective).toContain("You are an Orca reviewer.");
+    expect(effective).toContain("Keep append.");
+    expect(effective).toContain("Keep context.");
+    expect(effective).not.toContain("Unavailable");
+    expect(effective).not.toContain("<available_agents>");
+    const defaultPrompt = await effectiveRunnerPrompt(runner, "Default", { ...input, customPrompt: undefined });
+    expect(defaultPrompt.effective).toBe(defaultPrompt.base);
+  });
+});
 
 describe("parseOrcaWorkerDispatch", () => {
   it("extracts handle, task id, dispatch id, and capability from a well-formed prompt", () => {

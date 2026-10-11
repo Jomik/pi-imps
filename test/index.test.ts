@@ -255,7 +255,8 @@ describe("imp worker mode (is-imp flag)", () => {
     // modes register it at factory time); worker mode never registers any
     // of the ordinary parent hooks/tools/commands.
     expect(handlers.has("session_start")).toBe(true);
-    expect(handlers.has("before_agent_start")).toBe(false);
+    // Worker tool guidance is private; no parent available-agents injection.
+    expect(handlers.has("before_agent_start")).toBe(true);
     expect(handlers.has("session_before_switch")).toBe(false);
     expect(handlers.has("session_shutdown")).toBe(false);
     expect(handlers.has("turn_start")).toBe(false);
