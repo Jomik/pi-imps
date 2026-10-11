@@ -87,23 +87,21 @@ describe("preserveImpToolPrompt effective output", () => {
     expect(renderNew(input)).toContain("User section.");
     preserveImpToolPrompt(event);
     assertGuidance(renderNew(input));
-    input.sections.imp_tool_guidance += "\n\nLater extension text.";
-    input.selectedTools = ["read"];
-    input.promptGuidelines = [];
-    preserveImpToolPrompt(event);
-    expect(renderNew(input)).not.toContain("Batch selected calls.");
-    expect(renderNew(input)).not.toContain("Use batch");
-    expect(renderNew(input)).toContain("Read carefully.");
-    input.selectedTools = [];
-    preserveImpToolPrompt(event);
-    expect(input.sections.imp_tool_guidance).toBe("Existing extension text.\n\nLater extension text.");
-    delete input.sections.imp_tool_guidance;
-    input.selectedTools = ["read"];
-    preserveImpToolPrompt(event);
-    expect(renderNew(input)).toContain("Read carefully.");
-    input.selectedTools = [];
-    preserveImpToolPrompt(event);
-    expect(input.sections).toEqual({ custom: "User section." });
+    // The runner supplies fresh sections on the next agent start.
+    const next = {
+      ...input,
+      selectedTools: ["read"],
+      promptGuidelines: [],
+      sections: { imp_tool_guidance: "Existing extension text.", custom: "User section." },
+    };
+    preserveImpToolPrompt({ systemPrompt: renderNew(next), systemPromptOptions: next });
+    expect(renderNew(next)).not.toContain("Batch selected calls.");
+    expect(renderNew(next)).not.toContain("Use batch");
+    expect(renderNew(next)).toContain("Read carefully.");
+    expect(renderNew(next)).toContain("Existing extension text.");
+    const empty = { ...next, selectedTools: [], sections: { custom: "User section." } };
+    preserveImpToolPrompt({ systemPrompt: renderNew(empty), systemPromptOptions: empty });
+    expect(empty.sections).toEqual({ custom: "User section." });
   });
 
   it.each([undefined, "", " \n "])("leaves default/empty custom prompts unchanged: %j", (customPrompt) => {
@@ -124,5 +122,8 @@ describe("preserveImpToolPrompt effective output", () => {
     }
     const input = { ...options(), selectedTools: [], promptGuidelines: ["", "  "] };
     expect(effectiveOld(input)).toBe(buildSystemPrompt(input));
+    input.sections = { imp_tool_guidance: "Existing text." };
+    expect(preserveImpToolPrompt({ systemPrompt: renderNew(input), systemPromptOptions: input })).toBeUndefined();
+    expect(input.sections).toEqual({ imp_tool_guidance: "Existing text." });
   });
 });

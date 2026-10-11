@@ -12,7 +12,6 @@ import {
   type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { buildSystemPrompt } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
 import {
   buildImpResourceLoader,
   createImpSettingsManager,
@@ -25,6 +24,7 @@ import {
   validateImpFlags,
 } from "../src/session.js";
 import { preserveImpToolPrompt } from "../src/tool-prompt.js";
+import { effectiveRunnerPrompt } from "./helpers/tool-prompt.js";
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -100,23 +100,24 @@ describe("inline imp prompt hook through the installed ExtensionRunner", () => {
         contextFiles: [{ path: "/AGENTS.md", content: "Keep project rules." }],
         selectedTools: ["batch"],
         toolSnippets: { batch: "Batch independent calls.", unavailable: "Hidden snippet" },
+        toolGuidelines: { batch: ["Use batches."], unavailable: ["Hidden guideline"] },
         promptGuidelines: ["Use batches."],
       };
-      const base = buildSystemPrompt(input);
+      const { base, effective } = await effectiveRunnerPrompt(runner, "Review changes", input);
       expect(base).not.toContain("Batch independent calls.");
-      const result = await runner.emitBeforeAgentStart("Review changes", undefined, base, input);
       expect(errors).toEqual([]);
-      // AgentSession uses this returned value, not mutations to input options.
-      expect(result?.systemPrompt).toBe(
-        `${base}\n\nAvailable tools:\n- batch: Batch independent calls.\n\nGuidelines:\n- Use batches.`,
-      );
-      expect(result?.systemPrompt).toContain("You are a reviewer.");
-      expect(result?.systemPrompt).toContain("Keep append instructions.");
-      expect(result?.systemPrompt).toContain("Keep project rules.");
-      expect(result?.systemPrompt).not.toContain("Hidden");
-      input.selectedTools = [];
-      input.promptGuidelines = [];
-      expect(await runner.emitBeforeAgentStart("Next task", undefined, base, input)).toBeUndefined();
+      expect(effective).toContain("Available tools:\n- batch: Batch independent calls.\n\nGuidelines:\n- Use batches.");
+      expect(effective.match(/- Use batches\./g)).toHaveLength(1);
+      expect(effective).toContain("You are a reviewer.");
+      expect(effective).toContain("Keep append instructions.");
+      expect(effective).toContain("Keep project rules.");
+      expect(effective).not.toContain("Hidden");
+      const next = await effectiveRunnerPrompt(runner, "Next task", {
+        ...input,
+        selectedTools: [],
+        promptGuidelines: [],
+      });
+      expect(next.effective).toBe(next.base);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

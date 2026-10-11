@@ -7,7 +7,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { loadExtensionFromFactory } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js";
-import { buildSystemPrompt } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
 import {
   buildOrcaSendArgs,
   buildStatusSubject,
@@ -22,7 +21,9 @@ import {
   reportImpCompletion,
   verifyOrcaWorkerDispatch,
 } from "../src/orca.js";
+import { buildImpResourceLoader } from "../src/session.js";
 import { preserveImpToolPrompt } from "../src/tool-prompt.js";
+import { effectiveRunnerPrompt } from "./helpers/tool-prompt.js";
 
 function validPrompt(overrides?: Partial<{ handle: string; taskId: string; dispatchId: string; capability: string }>) {
   const handle = overrides?.handle ?? "worker-7";
@@ -48,7 +49,29 @@ describe("Orca tool prompt registration through the installed ExtensionRunner", 
       createEventBus(),
       runtime,
     );
-    expect(extension.handlers.get("before_agent_start")).toEqual([preserveImpToolPrompt]);
+    const { loader } = await buildImpResourceLoader(
+      "/project",
+      {
+        name: "reviewer",
+        description: "review",
+        source: "project",
+        filePath: "/reviewer.md",
+        systemPrompt: "You are a reviewer.",
+        tools: [],
+      },
+      {
+        turnLimit: 30,
+        toolAllowlist: undefined,
+        additionalExtensions: [],
+        impFlags: [],
+        agents: {},
+        orca: { enabled: false },
+      },
+    );
+    await loader.reload();
+    const inline = loader.getExtensions().extensions.find((ext) => ext.path === "<inline:1>");
+    expect(inline?.handlers.get("before_agent_start")).toEqual([preserveImpToolPrompt]);
+    expect(extension.handlers.get("before_agent_start")).toEqual(inline?.handlers.get("before_agent_start"));
     const runner = new ExtensionRunner(
       [extension],
       runtime,
@@ -65,24 +88,20 @@ describe("Orca tool prompt registration through the installed ExtensionRunner", 
       contextFiles: [{ path: "/AGENTS.md", content: "Keep context." }],
       selectedTools: ["batch"],
       toolSnippets: { batch: "Batch calls.", hidden: "Unavailable" },
+      toolGuidelines: { batch: ["Use independent batches."], hidden: ["Unavailable guideline"] },
       promptGuidelines: ["Use independent batches."],
     };
-    const base = buildSystemPrompt(input);
-    const result = await runner.emitBeforeAgentStart("Review", undefined, base, input);
+    const { effective } = await effectiveRunnerPrompt(runner, "Review", input);
     expect(errors).toEqual([]);
-    expect(result?.systemPrompt).toBe(
-      `${base}\n\nAvailable tools:\n- batch: Batch calls.\n\nGuidelines:\n- Use independent batches.`,
-    );
-    expect(result?.systemPrompt).toContain("You are an Orca reviewer.");
-    expect(result?.systemPrompt).toContain("Keep append.");
-    expect(result?.systemPrompt).toContain("Keep context.");
-    expect(result?.systemPrompt).not.toContain("Unavailable");
-    expect(
-      await runner.emitBeforeAgentStart("Default", undefined, "Default Pi prompt", {
-        ...input,
-        customPrompt: undefined,
-      }),
-    ).toBeUndefined();
+    expect(effective).toContain("Available tools:\n- batch: Batch calls.\n\nGuidelines:\n- Use independent batches.");
+    expect(effective.match(/- Use independent batches\./g)).toHaveLength(1);
+    expect(effective).toContain("You are an Orca reviewer.");
+    expect(effective).toContain("Keep append.");
+    expect(effective).toContain("Keep context.");
+    expect(effective).not.toContain("Unavailable");
+    expect(effective).not.toContain("<available_agents>");
+    const defaultPrompt = await effectiveRunnerPrompt(runner, "Default", { ...input, customPrompt: undefined });
+    expect(defaultPrompt.effective).toBe(defaultPrompt.base);
   });
 });
 

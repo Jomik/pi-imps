@@ -1,9 +1,5 @@
 import type { BeforeAgentStartEvent } from "@earendil-works/pi-coding-agent";
 
-// Track only our insertion, not tool metadata, so reused sections can be refreshed
-// without losing text installed by the user or another extension.
-const insertions = new WeakMap<Record<string, string>, { before: string; after: string }>();
-
 /** Retain runtime-provided tool guidance when an imp replaces Pi's default prompt. */
 export function preserveImpToolPrompt(
   event: Pick<BeforeAgentStartEvent, "systemPrompt"> & {
@@ -41,19 +37,14 @@ export function preserveImpToolPrompt(
     .filter(Boolean)
     .join("\n\n");
 
-  // Normalized newer options expose mutable sections that the runner rebuilds.
+  // Guidance is computed at agent start; mid-run tool reconfiguration takes effect next start.
+  // Newer Pi normalizes fresh mutable sections for each agent start.
   const sections = options.sections;
   if (sections && typeof sections === "object" && !Array.isArray(sections)) {
     const current = sections.imp_tool_guidance ?? "";
-    const previous = insertions.get(sections);
-    const before =
-      previous?.after && current.startsWith(previous.after)
-        ? previous.before + current.slice(previous.after.length)
-        : current;
-    const after = [before, guidance].filter(Boolean).join("\n\n");
-    if (after) sections.imp_tool_guidance = after;
-    else delete sections.imp_tool_guidance;
-    insertions.set(sections, { before, after });
+    if (guidance && current !== guidance && !current.endsWith(`\n\n${guidance}`)) {
+      sections.imp_tool_guidance = [current, guidance].filter(Boolean).join("\n\n");
+    }
     return undefined;
   }
 
