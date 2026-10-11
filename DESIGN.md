@@ -86,7 +86,9 @@ Invalid definitions are excluded while valid agents continue loading. Project de
 
 ### System Prompt
 
-Available agents are injected into the system prompt at session start, matching pi's pattern for skills (XML block).
+Available agents are injected into the parent system prompt at session start, matching pi's pattern for skills (XML block).
+
+An imp's agent body remains its custom system prompt, overriding ambient `SYSTEM.md` when non-empty. Both in-process and Orca workers retain tool-provided prompt summaries and guidelines alongside that body, using Pi's runtime prompt metadata for the selected tools rather than copied instructions. The agent's identity, tool permissions, project context, append instructions, and prompt transport remain unchanged; Pi's generic coding-assistant identity and documentation scaffold are not restored. Sessions without a custom prompt continue using Pi's normal prompt construction. This adds no settings or public tools.
 
 ### Footer
 

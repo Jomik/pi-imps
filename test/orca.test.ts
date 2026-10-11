@@ -1,10 +1,20 @@
+import {
+  createEventBus,
+  createExtensionRuntime,
+  ExtensionRunner,
+  type ModelRegistry,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { loadExtensionFromFactory } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js";
+import { buildSystemPrompt } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
 import {
   buildOrcaSendArgs,
   buildStatusSubject,
   createImpLifecycleState,
   DEFAULT_IMP_TURN_LIMIT,
   extractTaskAfterMarker,
+  initOrcaWorker,
   ORCA_DISPATCHED_WORKER_PREAMBLE,
   parseImpLifecycleStatus,
   parseImpTurnLimit,
@@ -12,6 +22,7 @@ import {
   reportImpCompletion,
   verifyOrcaWorkerDispatch,
 } from "../src/orca.js";
+import { preserveImpToolPrompt } from "../src/tool-prompt.js";
 
 function validPrompt(overrides?: Partial<{ handle: string; taskId: string; dispatchId: string; capability: string }>) {
   const handle = overrides?.handle ?? "worker-7";
@@ -27,6 +38,53 @@ When finished, report completion by running:
 orca orchestration send --from ${handle} --dispatch-capability ${capability} --type worker_done --subject "Task complete" --body "Implemented the feature and tests pass." --task-id ${taskId} --dispatch-id ${dispatchId} --outcome succeeded
 `;
 }
+
+describe("Orca tool prompt registration through the installed ExtensionRunner", () => {
+  it("uses the shared hook and returns role-preserving effective guidance", async () => {
+    const runtime = createExtensionRuntime();
+    const extension = await loadExtensionFromFactory(
+      (pi) => initOrcaWorker(pi, 30),
+      "/project",
+      createEventBus(),
+      runtime,
+    );
+    expect(extension.handlers.get("before_agent_start")).toEqual([preserveImpToolPrompt]);
+    const runner = new ExtensionRunner(
+      [extension],
+      runtime,
+      "/project",
+      SessionManager.inMemory("/project"),
+      {} as ModelRegistry,
+    );
+    const errors: unknown[] = [];
+    runner.onError((error) => errors.push(error));
+    const input = {
+      cwd: "/project",
+      customPrompt: "You are an Orca reviewer.",
+      appendSystemPrompt: "Keep append.",
+      contextFiles: [{ path: "/AGENTS.md", content: "Keep context." }],
+      selectedTools: ["batch"],
+      toolSnippets: { batch: "Batch calls.", hidden: "Unavailable" },
+      promptGuidelines: ["Use independent batches."],
+    };
+    const base = buildSystemPrompt(input);
+    const result = await runner.emitBeforeAgentStart("Review", undefined, base, input);
+    expect(errors).toEqual([]);
+    expect(result?.systemPrompt).toBe(
+      `${base}\n\nAvailable tools:\n- batch: Batch calls.\n\nGuidelines:\n- Use independent batches.`,
+    );
+    expect(result?.systemPrompt).toContain("You are an Orca reviewer.");
+    expect(result?.systemPrompt).toContain("Keep append.");
+    expect(result?.systemPrompt).toContain("Keep context.");
+    expect(result?.systemPrompt).not.toContain("Unavailable");
+    expect(
+      await runner.emitBeforeAgentStart("Default", undefined, "Default Pi prompt", {
+        ...input,
+        customPrompt: undefined,
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("parseOrcaWorkerDispatch", () => {
   it("extracts handle, task id, dispatch id, and capability from a well-formed prompt", () => {

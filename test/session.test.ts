@@ -1,12 +1,20 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  createExtensionRuntime,
   type Extension,
+  ExtensionRunner,
   ModelRegistry,
   ModelRuntime,
+  SessionManager,
   SettingsManager,
   type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import { buildSystemPrompt } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
 import {
+  buildImpResourceLoader,
   createImpSettingsManager,
   getBackingModelRuntime,
   normalizeEmptyToolError,
@@ -16,6 +24,7 @@ import {
   shouldIncludeExtension,
   validateImpFlags,
 } from "../src/session.js";
+import { preserveImpToolPrompt } from "../src/tool-prompt.js";
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -47,6 +56,72 @@ function makeExt(
 }
 
 // ─── getBackingModelRuntime ────────────────────────────────────────────────
+
+describe("inline imp prompt hook through the installed ExtensionRunner", () => {
+  it("returns effective guidance with role, context and appends intact", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-imps-prompt-"));
+    try {
+      const { loader } = await buildImpResourceLoader(
+        cwd,
+        {
+          name: "reviewer",
+          description: "review",
+          source: "project",
+          filePath: "/reviewer.md",
+          systemPrompt: "You are a reviewer.",
+          tools: [],
+        },
+        {
+          turnLimit: 30,
+          toolAllowlist: undefined,
+          additionalExtensions: [],
+          impFlags: [],
+          agents: {},
+          orca: { enabled: false },
+        },
+      );
+      await loader.reload();
+      const inline = loader.getExtensions().extensions.find((ext) => ext.path === "<inline:1>");
+      expect(inline).toBeDefined();
+      expect(inline?.handlers.get("before_agent_start")).toEqual([preserveImpToolPrompt]);
+      const runner = new ExtensionRunner(
+        [inline as Extension],
+        createExtensionRuntime(),
+        cwd,
+        SessionManager.inMemory(cwd),
+        {} as ModelRegistry,
+      );
+      const errors: unknown[] = [];
+      runner.onError((error) => errors.push(error));
+      const input = {
+        customPrompt: loader.getSystemPrompt(),
+        cwd,
+        appendSystemPrompt: "Keep append instructions.",
+        contextFiles: [{ path: "/AGENTS.md", content: "Keep project rules." }],
+        selectedTools: ["batch"],
+        toolSnippets: { batch: "Batch independent calls.", unavailable: "Hidden snippet" },
+        promptGuidelines: ["Use batches."],
+      };
+      const base = buildSystemPrompt(input);
+      expect(base).not.toContain("Batch independent calls.");
+      const result = await runner.emitBeforeAgentStart("Review changes", undefined, base, input);
+      expect(errors).toEqual([]);
+      // AgentSession uses this returned value, not mutations to input options.
+      expect(result?.systemPrompt).toBe(
+        `${base}\n\nAvailable tools:\n- batch: Batch independent calls.\n\nGuidelines:\n- Use batches.`,
+      );
+      expect(result?.systemPrompt).toContain("You are a reviewer.");
+      expect(result?.systemPrompt).toContain("Keep append instructions.");
+      expect(result?.systemPrompt).toContain("Keep project rules.");
+      expect(result?.systemPrompt).not.toContain("Hidden");
+      input.selectedTools = [];
+      input.promptGuidelines = [];
+      expect(await runner.emitBeforeAgentStart("Next task", undefined, base, input)).toBeUndefined();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("getBackingModelRuntime", () => {
   it("reads the real ModelRegistry's backing ModelRuntime instance", async () => {

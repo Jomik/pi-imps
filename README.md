@@ -58,6 +58,8 @@ You are a security reviewer. Focus on authentication, authorization, and input v
 | `tools` | no | Restrict which tools the agent can use. Omit to fall back to the global `toolAllowlist`, or all tools if no global allowlist is set |
 | `turns` | no | Per-agent turn limit (minimum 2). Overrides the global `turnLimit` setting |
 
+A non-empty agent body replaces Pi's default system prompt. Local and Orca imps retain Pi-provided summaries and guidelines for their selected tools alongside that role, without restoring Pi's generic identity or documentation scaffold. Project context, append instructions, and tool permissions are unchanged; agents without a custom prompt use Pi's normal prompt construction.
+
 Agent definitions are validated at startup and on reload; invalid files are skipped and reported in a single warning, and unknown extra frontmatter keys are allowed.
 
 ### Tool allowlist

@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FINAL_TURN_DIRECTIVE, normalizeEmptyToolError } from "./session.js";
+import { preserveImpToolPrompt } from "./tool-prompt.js";
 
 /**
  * Strict Orca-dispatched-worker bridge.
@@ -331,6 +332,7 @@ export function initOrcaWorker(pi: ExtensionAPI, turnLimit: number): void {
   let state: ImpLifecycleState = createImpLifecycleState();
 
   pi.on("tool_result", normalizeEmptyToolError);
+  pi.on("before_agent_start", preserveImpToolPrompt);
 
   pi.on("input", (event) => {
     const verified = verifyOrcaWorkerDispatch(event.text);

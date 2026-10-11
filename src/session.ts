@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
 import { loadProjectConfig } from "./settings.js";
+import { preserveImpToolPrompt } from "./tool-prompt.js";
 import type { AgentConfig, ImpSettings, ThinkingLevel } from "./types.js";
 
 export type { ThinkingLevel };
@@ -84,9 +85,10 @@ export function normalizeEmptyToolError(event: ToolResultEvent) {
   };
 }
 
-/** Hidden inline extension registering `normalizeEmptyToolError` on every imp child session. */
+/** Hidden prompt guidance and error normalization hooks for every imp child session. */
 const InlineExtension: ExtensionFactory = (pi) => {
   pi.on("tool_result", normalizeEmptyToolError);
+  pi.on("before_agent_start", preserveImpToolPrompt);
 };
 
 export interface ImpResourceLoader {
