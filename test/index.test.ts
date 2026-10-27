@@ -304,12 +304,22 @@ orca orchestration send --from ${handle} --dispatch-capability ${CAPABILITY} --t
 ${task}`;
     }
 
-    it("transforms a verified worker input to exactly the task text, stripping preamble/id/capability/command", () => {
-      const { pi, handlers } = createMockPi(true);
+    it.each([
+      { label: "legacy single-line", continued: false, capability: true, lead: false },
+      { label: "legacy continued", continued: true, capability: true, lead: false },
+      { label: "current capability-free", continued: false, capability: false, lead: false },
+      { label: "current with dispatch lead", continued: false, capability: false, lead: true },
+    ])("scrubs a verified input and reports completion ($label)", async ({ continued, capability, lead }) => {
+      const { pi, handlers, exec } = createMockPi(true);
       extensionFactory(pi);
       startSession(handlers);
 
-      const prompt = workerPrompt("Fix the failing test in src/foo.ts.");
+      const raw = workerPrompt("Fix the failing test in src/foo.ts.");
+      let prompt = continued ? raw.replace(/ --(?=type|body|task-id)/g, " \\\n    --") : raw;
+      if (!capability) prompt = prompt.replace(` --dispatch-capability ${CAPABILITY}`, "");
+      if (lead) {
+        prompt = `Please carry out this task from my Orca coordinator by following the brief I pasted below. ${prompt}`;
+      }
       const result = handlers.get("input")?.({ type: "input", text: prompt, source: "interactive" }, undefined) as
         | { action: string; text?: string }
         | undefined;
@@ -320,6 +330,36 @@ ${task}`;
       expect(result?.text).not.toContain("dispatch-456");
       expect(result?.text).not.toContain("task_fba7406bf543");
       expect(result?.text).not.toContain("orca orchestration send");
+
+      await handlers.get("turn_end")?.(
+        {
+          type: "turn_end",
+          turnIndex: 0,
+          message: { role: "assistant", content: [{ type: "text", text: "Done." }], stopReason: "stop" },
+        },
+        { abort: vi.fn() },
+      );
+      await handlers.get("agent_settled")?.({}, undefined);
+      await handlers.get("agent_settled")?.({}, undefined);
+
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(exec).toHaveBeenCalledWith(
+        "orca",
+        expect.arrayContaining([
+          "--from",
+          "worker-7",
+          ...(capability ? ["--dispatch-capability", CAPABILITY] : []),
+          "--subject",
+          "pi-imps:completed",
+          "--body",
+          "Done.",
+          "--task-id",
+          "task_fba7406bf543",
+          "--dispatch-id",
+          "dispatch-456",
+        ]),
+      );
+      if (!capability) expect(exec.mock.calls[0][1]).not.toContain("--dispatch-capability");
     });
 
     it("preserves images by not overriding them on transform", () => {
@@ -358,16 +398,18 @@ ${task}`;
       expect(result).toEqual({ action: "continue" });
     });
 
-    it("continues unchanged when ORCA_TERMINAL_HANDLE does not match", () => {
+    it.each([true, false])("rejects a mismatched terminal handle (capability: %s)", (capability) => {
       process.env.ORCA_TERMINAL_HANDLE = "worker-9";
       const { pi, handlers } = createMockPi(true);
       extensionFactory(pi);
       startSession(handlers);
 
-      const result = handlers.get("input")?.(
-        { type: "input", text: workerPrompt("Do the thing."), source: "interactive" },
-        undefined,
-      );
+      let prompt = workerPrompt("Do the thing.");
+      if (!capability) {
+        prompt = prompt.replace(` --dispatch-capability ${CAPABILITY}`, "");
+        prompt = `Please carry out this task from my Orca coordinator by following the brief I pasted below. ${prompt}`;
+      }
+      const result = handlers.get("input")?.({ type: "input", text: prompt, source: "interactive" }, undefined);
 
       expect(result).toEqual({ action: "continue" });
     });

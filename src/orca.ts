@@ -32,20 +32,23 @@ export interface OrcaWorkerDispatch {
   readonly workerHandle: string;
   readonly taskId: string;
   readonly dispatchId: string;
-  readonly capability: string;
+  /** Legacy Orca hosts supply this; current hosts authenticate the CLI caller. */
+  readonly capability?: string;
 }
 
 /**
  * Strictly parse Orca's dispatched-worker preamble.
  *
- * Requires the prompt to begin with the exact worker preamble sentence and
- * contain a line-anchored `Your task ID is: <taskId>` sentence, plus an
- * embedded `orca orchestration send ... --type worker_done ...` command
- * line (optionally indented with leading horizontal whitespace, as Orca's
- * real preamble does). The worker handle, capability, dispatch id, and task
- * id are extracted from that command line's `--from`, `--dispatch-capability`,
- * `--dispatch-id`, and `--task-id` flags respectively — whitespace-delimited
- * values only; the command's quoted `--subject`/`--body` text is never
+ * Requires the exact worker preamble sentence at the start, optionally after
+ * Orca's exact typed lead sentence. Also requires a line-anchored
+ * `Your task ID is: <taskId>` sentence and an embedded
+ * `orca orchestration send ... --type worker_done ...` command
+ * line (optionally indented or split with shell-style backslash continuations,
+ * as Orca's real preamble does). The worker handle, capability, dispatch id,
+ * and task id are extracted from that command line's `--from`, `--dispatch-capability`,
+ * `--dispatch-id`, and `--task-id` flags respectively. The capability flag is
+ * optional on current Orca hosts but must have a value when present. All values
+ * are whitespace-delimited; the command's quoted `--subject`/`--body` text is never
  * parsed on its own, but because Orca's flag order is fixed (subject/body
  * before task-id/dispatch-id), the *last* occurrence of `--task-id` and
  * `--dispatch-id` in the command line is used so flag-like text quoted
@@ -54,24 +57,33 @@ export interface OrcaWorkerDispatch {
  * Returns undefined on any mismatch or omission.
  */
 export function parseOrcaWorkerDispatch(prompt: string): OrcaWorkerDispatch | undefined {
+  // Orca may type this exact request before pasting the worker preamble.
+  prompt = prompt.replace(
+    /^Please carry out this task from my Orca coordinator by following the brief I pasted below\.[ \t\r\n]+/,
+    "",
+  );
   if (!prompt.startsWith(ORCA_DISPATCHED_WORKER_PREAMBLE)) return undefined;
 
   const taskIdMatch = prompt.match(/^Your task ID is:\s*(\S+)\s*$/m);
   if (!taskIdMatch) return undefined;
   const taskId = taskIdMatch[1];
 
-  const commandLineMatch = prompt.match(/^[ \t]*orca orchestration send .*--type worker_done.*$/m);
+  // Join only explicit shell continuations; unrelated lines must stay separate.
+  const commandLineMatch = prompt
+    .replace(/\\\r?\n/g, "")
+    .match(/^[ \t]*orca orchestration send .*--type worker_done.*$/m);
   if (!commandLineMatch) return undefined;
   const commandLine = commandLineMatch[0];
 
   const fromMatch = commandLine.match(/--from\s+(\S+)/);
-  const capabilityMatch = commandLine.match(/--dispatch-capability\s+(\S+)/);
+  const capabilityMatch = commandLine.match(/--dispatch-capability(?:[ \t]+(\S+))?/);
   const taskIdFlagMatch = lastMatch(commandLine, /--task-id\s+(\S+)/g);
   const dispatchIdMatch = lastMatch(commandLine, /--dispatch-id\s+(\S+)/g);
-  if (!fromMatch || !capabilityMatch || !taskIdFlagMatch || !dispatchIdMatch) return undefined;
+  if (!fromMatch || !taskIdFlagMatch || !dispatchIdMatch) return undefined;
+  if (capabilityMatch && (!capabilityMatch[1] || capabilityMatch[1].startsWith("--"))) return undefined;
 
   const workerHandle = fromMatch[1];
-  const capability = capabilityMatch[1];
+  const capability = capabilityMatch?.[1];
   const dispatchId = dispatchIdMatch[1];
   if (taskIdFlagMatch[1] !== taskId) return undefined;
 
@@ -143,8 +155,7 @@ export function buildOrcaSendArgs(dispatch: OrcaWorkerDispatch, status: ImpLifec
     "send",
     "--from",
     dispatch.workerHandle,
-    "--dispatch-capability",
-    dispatch.capability,
+    ...(dispatch.capability ? ["--dispatch-capability", dispatch.capability] : []),
     "--type",
     "worker_done",
     "--subject",
