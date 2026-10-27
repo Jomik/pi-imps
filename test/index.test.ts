@@ -305,10 +305,11 @@ ${task}`;
     }
 
     it.each([
-      { label: "legacy single-line", continued: false, capability: true },
-      { label: "legacy continued", continued: true, capability: true },
-      { label: "current capability-free", continued: false, capability: false },
-    ])("scrubs a verified input and reports completion ($label)", async ({ continued, capability }) => {
+      { label: "legacy single-line", continued: false, capability: true, lead: false },
+      { label: "legacy continued", continued: true, capability: true, lead: false },
+      { label: "current capability-free", continued: false, capability: false, lead: false },
+      { label: "current with dispatch lead", continued: false, capability: false, lead: true },
+    ])("scrubs a verified input and reports completion ($label)", async ({ continued, capability, lead }) => {
       const { pi, handlers, exec } = createMockPi(true);
       extensionFactory(pi);
       startSession(handlers);
@@ -316,6 +317,9 @@ ${task}`;
       const raw = workerPrompt("Fix the failing test in src/foo.ts.");
       let prompt = continued ? raw.replace(/ --(?=type|body|task-id)/g, " \\\n    --") : raw;
       if (!capability) prompt = prompt.replace(` --dispatch-capability ${CAPABILITY}`, "");
+      if (lead) {
+        prompt = `Please carry out this task from my Orca coordinator by following the brief I pasted below. ${prompt}`;
+      }
       const result = handlers.get("input")?.({ type: "input", text: prompt, source: "interactive" }, undefined) as
         | { action: string; text?: string }
         | undefined;
@@ -401,7 +405,10 @@ ${task}`;
       startSession(handlers);
 
       let prompt = workerPrompt("Do the thing.");
-      if (!capability) prompt = prompt.replace(` --dispatch-capability ${CAPABILITY}`, "");
+      if (!capability) {
+        prompt = prompt.replace(` --dispatch-capability ${CAPABILITY}`, "");
+        prompt = `Please carry out this task from my Orca coordinator by following the brief I pasted below. ${prompt}`;
+      }
       const result = handlers.get("input")?.({ type: "input", text: prompt, source: "interactive" }, undefined);
 
       expect(result).toEqual({ action: "continue" });

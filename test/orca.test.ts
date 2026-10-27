@@ -166,6 +166,14 @@ Investigate the compatibility regression.
     expect(parseOrcaWorkerDispatch(prompt)).toBeUndefined();
   });
 
+  it.each([
+    "An unrelated instruction. ",
+    "Please carry out this task from my Orca coordinator by following the brief I pasted below. Unrelated text. ",
+    "Please carry out this task from my Orca coordinator by following a different brief. ",
+  ])("rejects unrecognized text before a complete preamble (%j)", (prefix) => {
+    expect(parseOrcaWorkerDispatch(prefix + validPrompt())).toBeUndefined();
+  });
+
   it("rejects a prompt missing the worker_done command", () => {
     const prompt = `${ORCA_DISPATCHED_WORKER_PREAMBLE}\n\nYour task ID is: task_fba7406bf543\n`;
     expect(parseOrcaWorkerDispatch(prompt)).toBeUndefined();
@@ -189,7 +197,11 @@ orca orchestration send --from worker-7 --dispatch-capability cap1 --type worker
     expect(parseOrcaWorkerDispatch(prompt)).toBeUndefined();
   });
 
-  it("accepts Orca 1.4.242's capability-free fenced command", () => {
+  it.each([
+    "",
+    "Please carry out this task from my Orca coordinator by following the brief I pasted below. ",
+    "Please carry out this task from my Orca coordinator by following the brief I pasted below.\n",
+  ])("accepts Orca 1.4.242's capability-free fenced command (lead: %j)", (lead) => {
     // https://github.com/stablyai/orca/blob/v1.4.242/src/main/runtime/orchestration/preamble.ts
     const prompt = `${ORCA_DISPATCHED_WORKER_PREAMBLE}
 Your coordinator's terminal handle is: coordinator-1
@@ -203,7 +215,7 @@ Your task ID is: task_fba7406bf543
 === TASK ===
 Investigate the compatibility regression.
 `;
-    expect(parseOrcaWorkerDispatch(prompt)).toEqual({
+    expect(parseOrcaWorkerDispatch(lead + prompt)).toEqual({
       workerHandle: "worker-7",
       taskId: "task_fba7406bf543",
       dispatchId: "dispatch-456",

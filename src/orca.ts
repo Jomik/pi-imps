@@ -39,9 +39,10 @@ export interface OrcaWorkerDispatch {
 /**
  * Strictly parse Orca's dispatched-worker preamble.
  *
- * Requires the prompt to begin with the exact worker preamble sentence and
- * contain a line-anchored `Your task ID is: <taskId>` sentence, plus an
- * embedded `orca orchestration send ... --type worker_done ...` command
+ * Requires the exact worker preamble sentence at the start, optionally after
+ * Orca's exact typed lead sentence. Also requires a line-anchored
+ * `Your task ID is: <taskId>` sentence and an embedded
+ * `orca orchestration send ... --type worker_done ...` command
  * line (optionally indented or split with shell-style backslash continuations,
  * as Orca's real preamble does). The worker handle, capability, dispatch id,
  * and task id are extracted from that command line's `--from`, `--dispatch-capability`,
@@ -56,6 +57,11 @@ export interface OrcaWorkerDispatch {
  * Returns undefined on any mismatch or omission.
  */
 export function parseOrcaWorkerDispatch(prompt: string): OrcaWorkerDispatch | undefined {
+  // Orca may type this exact request before pasting the worker preamble.
+  prompt = prompt.replace(
+    /^Please carry out this task from my Orca coordinator by following the brief I pasted below\.[ \t\r\n]+/,
+    "",
+  );
   if (!prompt.startsWith(ORCA_DISPATCHED_WORKER_PREAMBLE)) return undefined;
 
   const taskIdMatch = prompt.match(/^Your task ID is:\s*(\S+)\s*$/m);
