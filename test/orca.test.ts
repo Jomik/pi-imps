@@ -116,6 +116,45 @@ describe("parseOrcaWorkerDispatch", () => {
     });
   });
 
+  it.each(["\n", "\r\n"])("accepts Orca's backslash-continued worker_done command (%j line endings)", (newline) => {
+    // Matches stablyai/orca's buildDispatchPreamble command layout.
+    const prompt = `${ORCA_DISPATCHED_WORKER_PREAMBLE}
+Your coordinator's terminal handle is: coordinator-1
+Your task ID is: task_fba7406bf543
+
+=== CLI COMMANDS ===
+  orca orchestration send --from worker-7 --dispatch-capability cap-secret-xyz \\
+    --type worker_done --subject "<short status>" \\
+    --body "<3-sentence summary: what you did, what you found, what's left>" \\
+    --task-id task_fba7406bf543 --dispatch-id dispatch-456 --outcome succeeded \\
+    --files-modified "path/a,path/b" \\
+    --report-path "<optional: path to the full artifact>"
+
+=== TASK ===
+Investigate the compatibility regression.
+`;
+    expect(parseOrcaWorkerDispatch(prompt.replace(/\n/g, newline))).toEqual({
+      workerHandle: "worker-7",
+      taskId: "task_fba7406bf543",
+      dispatchId: "dispatch-456",
+      capability: "cap-secret-xyz",
+    });
+  });
+
+  it("does not join command lines without a backslash continuation", () => {
+    const prompt = validPrompt().replace(" --type worker_done", "\n    --type worker_done");
+    expect(parseOrcaWorkerDispatch(prompt)).toBeUndefined();
+  });
+
+  it("does not borrow missing dispatch flags from a separate command", () => {
+    const prompt = validPrompt()
+      .replace(" --type worker_done", " \\\n    --type worker_done")
+      .replace(" --dispatch-id dispatch-456", "");
+    expect(
+      parseOrcaWorkerDispatch(`${prompt}\norca orchestration send --type heartbeat --dispatch-id dispatch-456`),
+    ).toBeUndefined();
+  });
+
   it("does not require a standalone Dispatch ID line", () => {
     // validPrompt() already omits any "Dispatch ID:" line; this asserts that
     // omission alone does not cause rejection.
@@ -150,13 +189,29 @@ orca orchestration send --from worker-7 --dispatch-capability cap1 --type worker
     expect(parseOrcaWorkerDispatch(prompt)).toBeUndefined();
   });
 
-  it("rejects a command missing --dispatch-capability", () => {
+  it("accepts Orca 1.4.242's capability-free fenced command", () => {
+    // https://github.com/stablyai/orca/blob/v1.4.242/src/main/runtime/orchestration/preamble.ts
     const prompt = `${ORCA_DISPATCHED_WORKER_PREAMBLE}
-
+Your coordinator's terminal handle is: coordinator-1
 Your task ID is: task_fba7406bf543
 
-orca orchestration send --from worker-7 --type worker_done --subject "s" --body "b" --task-id task_fba7406bf543 --dispatch-id dispatch-456 --outcome succeeded
+=== CLI COMMANDS ===
+\`\`\`sh
+  orca orchestration send --from worker-7 --type worker_done --subject "<short status>" --body "<3-sentence summary: what you did, what you found, what's left>" --task-id task_fba7406bf543 --dispatch-id dispatch-456 --outcome succeeded
+\`\`\`
+
+=== TASK ===
+Investigate the compatibility regression.
 `;
+    expect(parseOrcaWorkerDispatch(prompt)).toEqual({
+      workerHandle: "worker-7",
+      taskId: "task_fba7406bf543",
+      dispatchId: "dispatch-456",
+    });
+  });
+
+  it.each(["", "--type"])("rejects a present legacy capability flag without a usable value (%j)", (value) => {
+    const prompt = validPrompt().replace("--dispatch-capability cap-secret-xyz", `--dispatch-capability ${value}`);
     expect(parseOrcaWorkerDispatch(prompt)).toBeUndefined();
   });
 
@@ -283,6 +338,29 @@ describe("buildOrcaSendArgs", () => {
       "pi-imps:completed",
       "--body",
       "Implemented the feature and tests pass.",
+      "--task-id",
+      "task_fba7406bf543",
+      "--dispatch-id",
+      "dispatch-456",
+      "--outcome",
+      "succeeded",
+      "--json",
+    ]);
+  });
+
+  it("omits the legacy capability flag for current Orca dispatches", () => {
+    const { capability: _capability, ...currentDispatch } = dispatch;
+    expect(buildOrcaSendArgs(currentDispatch, "completed", "Done.")).toEqual([
+      "orchestration",
+      "send",
+      "--from",
+      "worker-7",
+      "--type",
+      "worker_done",
+      "--subject",
+      "pi-imps:completed",
+      "--body",
+      "Done.",
       "--task-id",
       "task_fba7406bf543",
       "--dispatch-id",
