@@ -124,7 +124,7 @@ interface RunCreateResult {
 }
 
 interface TerminalCreateResult {
-  terminal?: { handle?: unknown };
+  terminal?: { handle?: unknown; worktreeId?: unknown };
 }
 
 interface TerminalWaitResult {
@@ -311,6 +311,7 @@ export class OrcaCoordinator {
         opts.signal,
       );
       terminalHandle = requireNonEmptyString(terminalResult.terminal?.handle, "terminal create");
+      const worktreeId = requireNonEmptyString(terminalResult.terminal?.worktreeId, "terminal create worktree");
 
       // Both startup gates share the same deadline, starting at terminal creation.
       const deadline = Date.now() + STARTUP_TIMEOUT_MS;
@@ -373,7 +374,19 @@ export class OrcaCoordinator {
 
       const workerResult = await execOrca<WorkerStartResult>(
         this.exec,
-        ["orchestration", "worker-start", "--run", run.id, "--task", taskId, "--terminal", terminalHandle, "--json"],
+        [
+          "orchestration",
+          "worker-start",
+          "--run",
+          run.id,
+          "--task",
+          taskId,
+          "--terminal",
+          terminalHandle,
+          "--worktree",
+          `id:${worktreeId}`,
+          "--json",
+        ],
         "worker start",
         opts.signal,
       );
