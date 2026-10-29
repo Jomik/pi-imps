@@ -14,7 +14,7 @@ import type { AgentConfig, ImpSettings } from "../src/types.js";
 // The whole stdout envelope is always `{ ok: true, result: {...} }`:
 //
 // - orchestration run-create      -> result.run.id
-// - terminal create               -> result.terminal.handle
+// - terminal create               -> result.terminal.handle / result.terminal.worktreeId
 // - terminal wait --for tui-idle  -> result.wait.satisfied / result.wait.status
 // - orchestration task-create     -> result.task.id (args: --task-title)
 // - orchestration worker-start    -> result.dispatchId, result.state === "ready", result.stage
@@ -127,7 +127,11 @@ class FakeOrcaCli {
       expect(readyFile).toBeDefined();
       this.readyFiles.push(readyFile as string);
       if (this.autoReady) writeFileSync(readyFile as string, "", { mode: 0o600 });
-      return { stdout: JSON.stringify(ok({ terminal: { handle } })), stderr: "", code: 0 };
+      return {
+        stdout: JSON.stringify(ok({ terminal: { handle, worktreeId: "terminal-worktree-id" } })),
+        stderr: "",
+        code: 0,
+      };
     }
 
     if (group === "terminal" && action === "wait") {
@@ -356,8 +360,53 @@ describe("OrcaCoordinator.spawn", () => {
     expect(taskCall?.[1]).toEqual(expect.arrayContaining(["--task-title", "imp-a"]));
 
     const workerCall = execSpy.mock.calls.find((c) => c[1][0] === "orchestration" && c[1][1] === "worker-start");
-    expect(workerCall?.[1]).toEqual(expect.arrayContaining(["--terminal", "handle_1"]));
+    expect(workerCall?.[1]).toEqual([
+      "orchestration",
+      "worker-start",
+      "--run",
+      "run_1",
+      "--task",
+      "task_1",
+      "--terminal",
+      "handle_1",
+      "--worktree",
+      "id:terminal-worktree-id",
+      "--json",
+    ]);
     expect(workerCall?.[1]).not.toContain("--worker");
+  });
+
+  it.each([
+    undefined,
+    null,
+    "",
+    42,
+  ])("rejects unusable worktree ID %s before dispatch and cleans up", async (worktreeId) => {
+    const cli = new FakeOrcaCli();
+    const originalExec = cli.exec;
+    cli.exec = async (command, args, options) => {
+      const result = await originalExec(command, args, options);
+      if (args[0] === "terminal" && args[1] === "create") {
+        return {
+          stdout: JSON.stringify(ok({ terminal: { handle: "handle_1", worktreeId } })),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return result;
+    };
+    const coordinator = makeCoordinator(cli);
+    const before = new Set(readdirSync(tmpdir()).filter((n) => n.startsWith("pi-imps-orca-system-prompt-")));
+    try {
+      await expect(coordinator.spawn(baseSpawnOpts())).rejects.toThrow(/terminal create worktree.*no usable id/);
+      expect(cli.closedTerminals).toEqual(["handle_1"]);
+      expect(cli.taskSeq).toBe(0);
+      expect(cli.dispatchSeq).toBe(0);
+      const leaked = readdirSync(tmpdir()).filter((n) => n.startsWith("pi-imps-orca-system-prompt-") && !before.has(n));
+      expect(leaked).toHaveLength(0);
+    } finally {
+      await coordinator.shutdown();
+    }
   });
 
   it("writes the system prompt to a private 0600 temp file, passes only its path into terminal create, and removes it once terminal wait succeeds", async () => {
